@@ -1,17 +1,19 @@
 import json
-from typing import List, TypedDict
+from typing import List, Optional, TypedDict
 from langchain_core.prompts import PromptTemplate
 from langchain_core.documents import Document
 from langchain_ollama import ChatOllama
 from langgraph.graph import START, END, StateGraph
 
 from app.core.config import settings
-from app.engine.retriever import get_reranked_retriever
+from app.engine.context_builder import build_context, source_citations
+from app.engine.retriever import retrieve_documents
 
 class GraphState(TypedDict):
     question: str
     generation: str
     documents: List[Document]
+    sources: Optional[list[dict]]
     run_count: int
 
 llm = ChatOllama(model=settings.OLLAMA_MODEL, temperature=0, base_url=settings.OLLAMA_BASE_URL)
@@ -21,9 +23,8 @@ def retrieve(state: GraphState):
     print("--- NODE: RETRIEVE DOCS ---")
     question = state["question"]
     run_count = state.get("run_count", 0)
-    retriever = get_reranked_retriever()
-    documents = retriever.invoke(question)
-    return {"documents": documents, "question": question, "run_count": run_count}
+    documents = retrieve_documents(question)
+    return {"documents": documents, "sources": source_citations(documents), "question": question, "run_count": run_count}
 
 def grade_documents(state: GraphState):
     print("--- NODE: GRADE DOCUMENT RELEVANCE ---")
@@ -58,9 +59,9 @@ def generate(state: GraphState):
     documents = state["documents"]
     run_count = state.get("run_count", 0) + 1
     
-    context = "\n\n".join(doc.page_content for doc in documents)
+    context = build_context(documents)
     prompt = PromptTemplate(
-        template="""You are a Support Docs Copilot. Use the retrieved context to answer the question concisely. If you don't know the answer, say "I don't know".
+        template="""You are a Support Docs Copilot. Use only the retrieved context to answer the question concisely. If the context does not contain the answer, say "I don't know".
         Question: {question} 
         Context: {context} 
         Answer:""",
@@ -68,7 +69,7 @@ def generate(state: GraphState):
     )
     rag_chain = prompt | llm
     generation = rag_chain.invoke({"context": context, "question": question})
-    return {"generation": generation.content, "run_count": run_count}
+    return {"generation": generation.content, "sources": source_citations(documents), "run_count": run_count}
 
 def decide_to_generate(state: GraphState):
     if not state["documents"]:
@@ -86,7 +87,7 @@ def check_hallucinations(state: GraphState):
         print("--- ROUTE: MAX RETRIES REACHED ---")
         return "end"
         
-    context = "\n\n".join(doc.page_content for doc in documents)
+    context = build_context(documents)
     prompt = PromptTemplate(
         template="""You are evaluating whether a generated answer is fully grounded in the retrieved facts.
         Facts: \n\n {context} \n\n

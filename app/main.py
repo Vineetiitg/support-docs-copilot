@@ -10,6 +10,7 @@ from langchain_ollama import ChatOllama
 from app.core.config import settings
 from app.core.dependencies import check_ollama, check_qdrant
 from app.core.logging import configure_logging, logger
+from app.engine.context_builder import build_context, format_sources
 from app.graph.workflow import compile_workflow
 from app.guardrails.validators import DetectPromptInjection
 
@@ -21,9 +22,17 @@ input_guard = Guard().use(DetectPromptInjection, on_fail="exception")
 class ChatRequest(BaseModel):
     query: str
 
+class SourceCitation(BaseModel):
+    source: str
+    page: int | None = None
+    chunk_id: str | None = None
+    doc_id: str | None = None
+    snippet: str
+
 class ChatResponse(BaseModel):
     query: str
     answer: str
+    sources: list[SourceCitation] = []
 
 @app.get("/health")
 async def health_endpoint():
@@ -42,6 +51,8 @@ async def ready_endpoint():
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
     started_at = time.perf_counter()
+    if len(request.query) > settings.MAX_QUERY_LENGTH:
+        raise HTTPException(status_code=400, detail="Query is too long.")
     if settings.ENABLE_GUARDRAILS:
         try:
             input_guard.validate(request.query)
@@ -52,14 +63,17 @@ async def chat_endpoint(request: ChatRequest):
     try:
         final_state = rag_agent.invoke(initial_state)
         answer = final_state.get("generation", "Unable to compile answer.")
+        sources = final_state.get("sources", [])
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
     logger.info("chat completed latency_ms=%s", round((time.perf_counter() - started_at) * 1000, 2))
-    return ChatResponse(query=request.query, answer=answer)
+    return ChatResponse(query=request.query, answer=answer, sources=sources)
 
 @app.post("/chat/stream")
 async def chat_stream_endpoint(request: ChatRequest):
+    if len(request.query) > settings.MAX_QUERY_LENGTH:
+        raise HTTPException(status_code=400, detail="Query is too long.")
     if settings.ENABLE_GUARDRAILS:
         try:
             input_guard.validate(request.query)
@@ -76,9 +90,9 @@ async def chat_stream_endpoint(request: ChatRequest):
             yield "I am sorry, no reliable matching documentation was found."
             return
 
-        context = "\n\n".join(doc.page_content for doc in documents)
+        context = build_context(documents)
         prompt = PromptTemplate(
-            template="""You are a Support Docs Copilot. Use the retrieved context to answer the question concisely. If you don't know the answer, say "I don't know".
+            template="""You are a Support Docs Copilot. Use only the retrieved context to answer the question concisely. If you don't know the answer, say "I don't know".
             Question: {question} 
             Context: {context} \n\nAnswer:""",
             input_variables=["question", "context"],
@@ -90,6 +104,7 @@ async def chat_stream_endpoint(request: ChatRequest):
             if chunk.content:
                 yield chunk.content
                 await asyncio.sleep(0.01)
+        yield format_sources(documents)
         logger.info("stream completed latency_ms=%s", round((time.perf_counter() - started_at) * 1000, 2))
 
     return StreamingResponse(token_generator(), media_type="text/event-stream")
