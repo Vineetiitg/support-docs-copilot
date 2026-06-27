@@ -1,0 +1,21 @@
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ragas_cache/
+qdrant_data/
+.env
+.env.*
+!.env.example
+.python/
+*.log
+*.err.log
+frontend.log
+backend.log
+fastembed_cache/
+.cache/
+model files
+Hugging Face cache
+Ollama models
+
