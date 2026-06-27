@@ -1,46 +1,133 @@
-import os
-from langchain_community.document_loaders import DirectoryLoader, TextLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import FastEmbedEmbeddings
-from langchain_qdrant import FastEmbedSparse, QdrantVectorStore, RetrievalMode
+import argparse
+import uuid
+from collections import Counter
+from pathlib import Path
 
-from app.core.config import settings
+from langchain_core.documents import Document
 
-def ingest_documents(data_dir: str = "data/docs"):
+from app.engine.chunking import chunk_documents
+from app.engine.document_registry import (
+    file_hash,
+    hash_exists,
+    load_registry,
+    save_registry,
+    upsert_record,
+)
+from app.engine.indexer import delete_document, index_documents, reset_collection
+from app.engine.loaders import SUPPORTED_EXTENSIONS, load_document
+
+
+def ingest_documents(data_dir: str = "data/docs", force: bool = False) -> None:
     print(f"Loading documents from {data_dir}...")
-    if not os.path.exists(data_dir):
-        os.makedirs(data_dir)
-        
-    loader = DirectoryLoader(data_dir, glob="**/*.txt", loader_cls=TextLoader)
-    documents = loader.load()
-    
-    if not documents:
-        print("No documents found. Please place some text documents into data/docs first.")
+    root = Path(data_dir)
+    root.mkdir(parents=True, exist_ok=True)
+
+    registry = {} if force else load_registry()
+    source_documents: list[Document] = []
+    doc_id_by_source: dict[str, str] = {}
+
+    if force:
+        reset_collection()
+
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+            continue
+
+        content_hash = file_hash(path)
+        if not force and hash_exists(content_hash, registry):
+            print(f"Skipping unchanged document: {path.name}")
+            continue
+
+        doc_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{path.name}:{content_hash}"))
+        loaded = load_document(path)
+        for document in loaded:
+            document.metadata["doc_id"] = doc_id
+            document.metadata["content_hash"] = content_hash
+        source_documents.extend(loaded)
+        doc_id_by_source[str(path)] = doc_id
+
+    if not source_documents:
+        print("No new documents found.")
         return
 
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-    chunks = text_splitter.split_documents(documents)
+    chunks = chunk_documents(source_documents)
     print(f"Split documents into {len(chunks)} chunks.")
 
-    dense_embeddings = FastEmbedEmbeddings(model_name=settings.DENSE_EMBEDDING_MODEL)
-    sparse_embeddings = FastEmbedSparse(model_name=settings.SPARSE_EMBEDDING_MODEL)
+    index_documents(chunks, force_recreate=force)
 
-    store_options = {
-        "url": settings.QDRANT_URL,
-    } if settings.QDRANT_URL else {
-        "path": settings.QDRANT_LOCATION,
-    }
+    chunk_counts = Counter(chunk.metadata["doc_id"] for chunk in chunks)
+    for source_path, doc_id in doc_id_by_source.items():
+        path = Path(source_path)
+        upsert_record(
+            doc_id=doc_id,
+            source=path.name,
+            source_path=str(path),
+            content_hash=file_hash(path),
+            chunk_count=chunk_counts[doc_id],
+            registry=registry,
+        )
+    save_registry(registry)
+    print("Ingestion complete. Hybrid index is built.")
 
-    QdrantVectorStore.from_documents(
-        chunks,
-        embedding=dense_embeddings,
-        sparse_embedding=sparse_embeddings,
-        collection_name=settings.COLLECTION_NAME,
-        retrieval_mode=RetrievalMode.HYBRID,
-        force_recreate=True,
-        **store_options,
-    )
-    print("Ingestion complete! Hybrid index is built.")
+
+def list_documents() -> None:
+    registry = load_registry()
+    if not registry:
+        print("No indexed documents found.")
+        return
+    for record in registry.values():
+        print(f"{record['doc_id']} | {record['source']} | chunks={record['chunk_count']}")
+
+
+def delete_indexed_document(doc_id: str) -> None:
+    registry = load_registry()
+    if doc_id not in registry:
+        print(f"Document not found: {doc_id}")
+        return
+    delete_document(doc_id)
+    del registry[doc_id]
+    save_registry(registry)
+    print(f"Deleted document: {doc_id}")
+
+
+def reset_index() -> None:
+    reset_collection()
+    save_registry({})
+    print("Vector collection and document registry reset.")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Manage support document ingestion.")
+    subparsers = parser.add_subparsers(dest="command")
+
+    ingest_parser = subparsers.add_parser("ingest", help="Ingest documents into Qdrant.")
+    ingest_parser.add_argument("--data-dir", default="data/docs")
+    ingest_parser.add_argument("--force", action="store_true", help="Recreate the collection before ingesting.")
+
+    subparsers.add_parser("list", help="List indexed documents.")
+
+    delete_parser = subparsers.add_parser("delete", help="Delete one indexed document.")
+    delete_parser.add_argument("--doc-id", required=True)
+
+    subparsers.add_parser("reset", help="Delete the vector collection and registry.")
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if args.command in {None, "ingest"}:
+        ingest_documents(data_dir=getattr(args, "data_dir", "data/docs"), force=getattr(args, "force", False))
+    elif args.command == "list":
+        list_documents()
+    elif args.command == "delete":
+        delete_indexed_document(args.doc_id)
+    elif args.command == "reset":
+        reset_index()
+    else:
+        parser.print_help()
+
 
 if __name__ == "__main__":
-    ingest_documents()
+    main()
