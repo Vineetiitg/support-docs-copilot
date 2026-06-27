@@ -15,7 +15,7 @@ frontend.log
 backend.log
 fastembed_cache/
 .cache/
-model files
-Hugging Face cache
-Ollama models
+reports/*.html
+reports/*.json
+data/document_registry.json
 
