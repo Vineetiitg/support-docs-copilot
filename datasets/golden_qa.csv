@@ -1,0 +1,3 @@
+question,expected_answer,expected_sources
+What is Error Code 404?,Error Code 404 indicates that the requested server resource was not found and the router configuration should be checked.,sample_error.txt
+What does this support copilot do?,The support copilot answers support questions using indexed documentation and retrieved context.,product_guide.txt
