@@ -15,6 +15,7 @@ from app.engine.document_registry import (
 )
 from app.engine.indexer import delete_document, index_documents, reset_collection
 from app.engine.loaders import SUPPORTED_EXTENSIONS, load_document
+from app.guardrails.document import filter_malicious_documents
 
 
 def ingest_documents(data_dir: str = "data/docs", force: bool = False) -> None:
@@ -40,6 +41,11 @@ def ingest_documents(data_dir: str = "data/docs", force: bool = False) -> None:
 
         doc_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{path.name}:{content_hash}"))
         loaded = load_document(path)
+        loaded, flagged = filter_malicious_documents(loaded)
+        for flagged_source in flagged:
+            print(f"Skipping document with suspicious instructions: {flagged_source}")
+        if not loaded:
+            continue
         for document in loaded:
             document.metadata["doc_id"] = doc_id
             document.metadata["content_hash"] = content_hash

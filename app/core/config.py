@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     ENABLE_GUARDRAILS: bool = True
     ENABLE_RAG_EVAL: bool = False
     MAX_QUERY_LENGTH: int = 2000
+    RATE_LIMIT_PER_MINUTE: int = 30
+
+    # Auth Config
+    AUTH_ENABLED: bool = False
+    ADMIN_API_KEY: str = "local-admin-key"
+    USER_API_KEY: str = "local-user-key"
 
     class Config:
         env_file = ".env"
