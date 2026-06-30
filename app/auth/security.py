@@ -1,7 +1,8 @@
-from fastapi import Header, HTTPException
+from fastapi import Header
 
 from app.auth.models import UserContext
 from app.core.config import settings
+from app.core.errors import CopilotError
 
 
 def resolve_user(x_api_key: str | None = Header(default=None)) -> UserContext:
@@ -11,9 +12,9 @@ def resolve_user(x_api_key: str | None = Header(default=None)) -> UserContext:
         return UserContext(role="admin", user_id="admin")
     if x_api_key == settings.USER_API_KEY:
         return UserContext(role="user", user_id="user")
-    raise HTTPException(status_code=401, detail="Invalid or missing API key.")
+    raise CopilotError("Invalid or missing API key.", status_code=401)
 
 
 def require_admin(user: UserContext) -> None:
     if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin role required.")
+        raise CopilotError("Admin role required.", status_code=403)

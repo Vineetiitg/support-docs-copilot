@@ -5,6 +5,8 @@ from pathlib import Path
 
 from langchain_core.documents import Document
 
+from app.core.logging import logger
+
 from app.engine.chunking import chunk_documents
 from app.engine.document_registry import (
     file_hash,
@@ -19,7 +21,7 @@ from app.guardrails.document import filter_malicious_documents
 
 
 def ingest_documents(data_dir: str = "data/docs", force: bool = False) -> None:
-    print(f"Loading documents from {data_dir}...")
+    logger.info(f"Loading documents from {data_dir}...")
     root = Path(data_dir)
     root.mkdir(parents=True, exist_ok=True)
 
@@ -36,14 +38,14 @@ def ingest_documents(data_dir: str = "data/docs", force: bool = False) -> None:
 
         content_hash = file_hash(path)
         if not force and hash_exists(content_hash, registry):
-            print(f"Skipping unchanged document: {path.name}")
+            logger.info(f"Skipping unchanged document: {path.name}")
             continue
 
         doc_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{path.name}:{content_hash}"))
         loaded = load_document(path)
         loaded, flagged = filter_malicious_documents(loaded)
         for flagged_source in flagged:
-            print(f"Skipping document with suspicious instructions: {flagged_source}")
+            logger.info(f"Skipping document with suspicious instructions: {flagged_source}")
         if not loaded:
             continue
         for document in loaded:
@@ -53,11 +55,11 @@ def ingest_documents(data_dir: str = "data/docs", force: bool = False) -> None:
         doc_id_by_source[str(path)] = doc_id
 
     if not source_documents:
-        print("No new documents found.")
+        logger.info("No new documents found.")
         return
 
     chunks = chunk_documents(source_documents)
-    print(f"Split documents into {len(chunks)} chunks.")
+    logger.info(f"Split documents into {len(chunks)} chunks.")
 
     index_documents(chunks, force_recreate=force)
 
@@ -73,33 +75,33 @@ def ingest_documents(data_dir: str = "data/docs", force: bool = False) -> None:
             registry=registry,
         )
     save_registry(registry)
-    print("Ingestion complete. Hybrid index is built.")
+    logger.info("Ingestion complete. Hybrid index is built.")
 
 
 def list_documents() -> None:
     registry = load_registry()
     if not registry:
-        print("No indexed documents found.")
+        logger.info("No indexed documents found.")
         return
     for record in registry.values():
-        print(f"{record['doc_id']} | {record['source']} | chunks={record['chunk_count']}")
+        logger.info(f"{record['doc_id']} | {record['source']} | chunks={record['chunk_count']}")
 
 
 def delete_indexed_document(doc_id: str) -> None:
     registry = load_registry()
     if doc_id not in registry:
-        print(f"Document not found: {doc_id}")
+        logger.info(f"Document not found: {doc_id}")
         return
     delete_document(doc_id)
     del registry[doc_id]
     save_registry(registry)
-    print(f"Deleted document: {doc_id}")
+    logger.info(f"Deleted document: {doc_id}")
 
 
 def reset_index() -> None:
     reset_collection()
     save_registry({})
-    print("Vector collection and document registry reset.")
+    logger.info("Vector collection and document registry reset.")
 
 
 def build_parser() -> argparse.ArgumentParser:

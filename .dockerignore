@@ -1,0 +1,17 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+.env
+qdrant_data/
+data/document_registry.json
+tests/
+reports/
+datasets/
+ui/
+*.md
+.python/
+*.log
+fastembed_cache/

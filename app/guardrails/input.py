@@ -2,9 +2,8 @@ import re
 import time
 from collections import defaultdict, deque
 
-from fastapi import HTTPException
-
 from app.core.config import settings
+from app.core.errors import CopilotError
 
 
 _requests_by_client: dict[str, deque[float]] = defaultdict(deque)
@@ -24,13 +23,13 @@ PROMPT_INJECTION_PATTERNS = [
 
 def validate_query(query: str) -> None:
     if not query.strip():
-        raise HTTPException(status_code=400, detail="Query cannot be empty.")
+        raise CopilotError("Query cannot be empty.", status_code=400)
     if len(query) > settings.MAX_QUERY_LENGTH:
-        raise HTTPException(status_code=400, detail="Query is too long.")
+        raise CopilotError("Query is too long.", status_code=400)
     normalized = query.lower()
     for pattern in PROMPT_INJECTION_PATTERNS:
         if pattern in normalized:
-            raise HTTPException(status_code=400, detail="Prompt injection attempt detected.")
+            raise CopilotError("Prompt injection attempt detected.", status_code=400)
 
 
 def enforce_rate_limit(client_id: str) -> None:
@@ -41,7 +40,7 @@ def enforce_rate_limit(client_id: str) -> None:
     while bucket and now - bucket[0] > 60:
         bucket.popleft()
     if len(bucket) >= settings.RATE_LIMIT_PER_MINUTE:
-        raise HTTPException(status_code=429, detail="Rate limit exceeded.")
+        raise CopilotError("Rate limit exceeded.", status_code=429)
     bucket.append(now)
 
 

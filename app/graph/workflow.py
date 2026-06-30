@@ -6,6 +6,7 @@ from langchain_ollama import ChatOllama
 from langgraph.graph import START, END, StateGraph
 
 from app.core.config import settings
+from app.core.logging import logger
 from app.engine.context_builder import build_context, source_citations
 from app.engine.retriever import retrieve_documents
 
@@ -20,14 +21,14 @@ llm = ChatOllama(model=settings.OLLAMA_MODEL, temperature=0, base_url=settings.O
 llm_json = ChatOllama(model=settings.OLLAMA_MODEL, temperature=0, format="json", base_url=settings.OLLAMA_BASE_URL)
 
 def retrieve(state: GraphState):
-    print("--- NODE: RETRIEVE DOCS ---")
+    logger.info("NODE: RETRIEVE DOCS")
     question = state["question"]
     run_count = state.get("run_count", 0)
     documents = retrieve_documents(question)
     return {"documents": documents, "sources": source_citations(documents), "question": question, "run_count": run_count}
 
 def grade_documents(state: GraphState):
-    print("--- NODE: GRADE DOCUMENT RELEVANCE ---")
+    logger.info("NODE: GRADE DOCUMENT RELEVANCE")
     question = state["question"]
     documents = state.get("documents", [])
     
@@ -54,7 +55,7 @@ def grade_documents(state: GraphState):
     return {"documents": filtered_docs}
 
 def generate(state: GraphState):
-    print("--- NODE: GENERATE ANSWER ---")
+    logger.info("NODE: GENERATE ANSWER")
     question = state["question"]
     documents = state["documents"]
     run_count = state.get("run_count", 0) + 1
@@ -73,9 +74,9 @@ def generate(state: GraphState):
 
 def decide_to_generate(state: GraphState):
     if not state["documents"]:
-        print("--- ROUTE: ALL DOCS IRRELEVANT ---")
+        logger.info("ROUTE: ALL DOCS IRRELEVANT")
         return "end"
-    print("--- ROUTE: RELEVANT DOCS FOUND ---")
+    logger.info("ROUTE: RELEVANT DOCS FOUND")
     return "generate"
 
 def check_hallucinations(state: GraphState):
@@ -84,7 +85,7 @@ def check_hallucinations(state: GraphState):
     run_count = state["run_count"]
     
     if run_count >= 3:
-        print("--- ROUTE: MAX RETRIES REACHED ---")
+        logger.info("ROUTE: MAX RETRIES REACHED")
         return "end"
         
     context = build_context(documents)
@@ -105,9 +106,9 @@ def check_hallucinations(state: GraphState):
         grade = "yes"
         
     if grade.lower() == "yes":
-        print("--- ROUTE: GROUNDED ---")
+        logger.info("ROUTE: GROUNDED")
         return "end"
-    print("--- ROUTE: HALLUCINATION DETECTED ---")
+    logger.info("ROUTE: HALLUCINATION DETECTED")
     return "regenerate"
 
 def compile_workflow():

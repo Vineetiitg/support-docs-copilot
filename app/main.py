@@ -1,6 +1,9 @@
 import asyncio
-from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from pathlib import Path
+
+from fastapi import Depends, FastAPI, File, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from guardrails import Guard
 from langchain_core.prompts import PromptTemplate
@@ -10,6 +13,7 @@ from app.auth.models import LoginRequest, LoginResponse, UserContext
 from app.auth.security import require_admin, resolve_user
 from app.core.config import settings
 from app.core.dependencies import check_ollama, check_qdrant
+from app.core.errors import CopilotError
 from app.core.logging import configure_logging, logger
 from app.engine.document_registry import load_registry
 from app.engine.ingestion import delete_indexed_document, ingest_documents, reset_index
@@ -22,6 +26,22 @@ from app.observability.metrics import RequestMetrics, log_request_metrics, timed
 
 configure_logging()
 app = FastAPI(title=settings.PROJECT_NAME)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.exception_handler(CopilotError)
+async def copilot_error_handler(request: Request, exc: CopilotError):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.message},
+    )
+
 rag_agent = compile_workflow()
 input_guard = Guard().use(DetectPromptInjection, on_fail="exception")
 
@@ -64,7 +84,7 @@ async def login_endpoint(request: LoginRequest):
         return LoginResponse(role="admin")
     if request.api_key == settings.USER_API_KEY:
         return LoginResponse(role="user")
-    raise HTTPException(status_code=401, detail="Invalid API key.")
+    raise CopilotError("Invalid API key.", status_code=401)
 
 @app.get("/documents")
 async def documents_endpoint(user: UserContext = Depends(resolve_user)):
@@ -75,6 +95,19 @@ async def admin_ingest_endpoint(request: IngestionRequest, user: UserContext = D
     require_admin(user)
     ingest_documents(data_dir=request.data_dir, force=request.force)
     return {"status": "ok", "message": "Ingestion completed."}
+
+@app.post("/admin/upload")
+async def admin_upload_endpoint(files: list[UploadFile] = File(...), user: UserContext = Depends(resolve_user)):
+    require_admin(user)
+    target_dir = Path(settings.DATA_DIR)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    saved_files = []
+    for uploaded_file in files:
+        filename = Path(uploaded_file.filename or "uploaded.txt").name
+        target_path = target_dir / filename
+        target_path.write_bytes(await uploaded_file.read())
+        saved_files.append(filename)
+    return {"status": "ok", "saved_files": saved_files, "data_dir": str(target_dir)}
 
 @app.delete("/admin/documents/{doc_id}")
 async def admin_delete_document_endpoint(doc_id: str, user: UserContext = Depends(resolve_user)):
@@ -97,7 +130,7 @@ async def chat_endpoint(request: ChatRequest, http_request: Request, user: UserC
         try:
             input_guard.validate(request.query)
         except Exception as e:
-            raise HTTPException(status_code=400, detail=str(getattr(e, "message", e)))
+            raise CopilotError(str(getattr(e, "message", e)), status_code=400)
 
     initial_state = {"question": request.query, "run_count": 0}
     try:
@@ -106,7 +139,7 @@ async def chat_endpoint(request: ChatRequest, http_request: Request, user: UserC
         answer = redact_sensitive_data(final_state.get("generation", "Unable to compile answer."))
         sources = final_state.get("sources", [])
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise CopilotError(str(e), status_code=500)
 
     log_request_metrics(metrics, route="/chat", sources=len(sources), model=settings.OLLAMA_MODEL)
     return ChatResponse(query=request.query, answer=answer, sources=sources)
@@ -119,7 +152,7 @@ async def chat_stream_endpoint(request: ChatRequest, http_request: Request, user
         try:
             input_guard.validate(request.query)
         except Exception as e:
-            raise HTTPException(status_code=400, detail=str(getattr(e, "message", e)))
+            raise CopilotError(str(getattr(e, "message", e)), status_code=400)
 
     async def token_generator():
         metrics = RequestMetrics()

@@ -21,7 +21,7 @@ pip install -r requirements.txt
 3. Ingest the sample docs:
 
 ```bash
-python app/engine/ingestion.py
+python -m app.engine.ingestion ingest
 ```
 
 4. Start the backend:
@@ -43,7 +43,7 @@ Backend docs run at `http://127.0.0.1:8000/docs`; the Streamlit app runs at `htt
 ```bash
 docker-compose up --build -d
 docker exec -it $(docker-compose ps -q ollama) ollama run llama3
-docker exec -it $(docker-compose ps -q backend) python app/engine/ingestion.py
+docker exec -it $(docker-compose ps -q backend) python -m app.engine.ingestion ingest
 ```
 
 ## Suggested Commit Roadmap
