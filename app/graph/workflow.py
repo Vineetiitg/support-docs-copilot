@@ -17,6 +17,8 @@ class GraphState(TypedDict):
     documents: List[Document]
     sources: Optional[list[dict]]
     run_count: int
+    confidence_score: float
+    grounded: str
 
 llm = ChatOllama(model=settings.OLLAMA_MODEL, temperature=0, base_url=settings.OLLAMA_BASE_URL)
 llm_json = ChatOllama(model=settings.OLLAMA_MODEL, temperature=0, format="json", base_url=settings.OLLAMA_BASE_URL)
@@ -87,31 +89,41 @@ def decide_to_generate(state: GraphState):
     logger.info("ROUTE: RELEVANT DOCS FOUND")
     return "generate"
 
-def check_hallucinations(state: GraphState):
+def evaluate_answer(state: GraphState):
+    logger.info("NODE: EVALUATE ANSWER")
     documents = state["documents"]
     generation = state["generation"]
-    run_count = state["run_count"]
     
-    if run_count >= 3:
-        logger.info("ROUTE: MAX RETRIES REACHED")
-        return "end"
-        
     context = build_context(documents)
     prompt = PromptTemplate(
         template="""You are evaluating whether a generated answer is fully grounded in the retrieved facts.
         Facts: \n\n {context} \n\n
         Answer: {generation} \n
         If the answer is supported by the facts, return 'yes'. If it contains hallucinations, return 'no'.
-        Provide a JSON with a single key 'score' and value 'yes' or 'no'.""",
+        Provide a JSON with keys 'score' (yes/no) and 'confidence' (float 0.0-1.0).""",
         input_variables=["context", "generation"],
     )
     grader = prompt | llm_json
     
     result = grader.invoke({"context": context, "generation": generation})
     try:
-        grade = json.loads(result.content).get("score", "yes")
+        parsed = json.loads(result.content)
+        grade = parsed.get("score", "yes")
+        confidence = float(parsed.get("confidence", 0.8))
     except:
         grade = "yes"
+        confidence = 0.5
+        
+    return {"grounded": grade, "confidence_score": confidence}
+
+def check_hallucinations(state: GraphState):
+    run_count = state["run_count"]
+    
+    if run_count >= 3:
+        logger.info("ROUTE: MAX RETRIES REACHED")
+        return "end"
+        
+    grade = state.get("grounded", "yes")
         
     if grade.lower() == "yes":
         logger.info("ROUTE: GROUNDED")
@@ -124,8 +136,10 @@ def compile_workflow():
     workflow.add_node("retrieve", retrieve)
     workflow.add_node("grade_documents", grade_documents)
     workflow.add_node("generate", generate)
+    workflow.add_node("evaluate_answer", evaluate_answer)
     workflow.add_edge(START, "retrieve")
     workflow.add_edge("retrieve", "grade_documents")
     workflow.add_conditional_edges("grade_documents", decide_to_generate, {"generate": "generate", "end": END})
-    workflow.add_conditional_edges("generate", check_hallucinations, {"end": END, "regenerate": "generate"})
+    workflow.add_edge("generate", "evaluate_answer")
+    workflow.add_conditional_edges("evaluate_answer", check_hallucinations, {"end": END, "regenerate": "generate"})
     return workflow.compile()

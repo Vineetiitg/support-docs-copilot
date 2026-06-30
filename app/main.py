@@ -62,6 +62,7 @@ class ChatResponse(BaseModel):
     query: str
     answer: str
     sources: list[SourceCitation] = []
+    confidence: float = 0.0
 
 class IngestionRequest(BaseModel):
     data_dir: str = "data/docs"
@@ -145,11 +146,12 @@ async def chat_endpoint(request: ChatRequest, http_request: Request, user: UserC
             final_state = rag_agent.invoke(initial_state)
         answer = redact_sensitive_data(final_state.get("generation", "Unable to compile answer."))
         sources = final_state.get("sources", [])
+        confidence = final_state.get("confidence_score", 0.0)
     except Exception as e:
         raise CopilotError(str(e), status_code=500)
 
     log_request_metrics(metrics, route="/chat", sources=len(sources), model=settings.OLLAMA_MODEL)
-    return ChatResponse(query=request.query, answer=answer, sources=sources)
+    return ChatResponse(query=request.query, answer=answer, sources=sources, confidence=confidence)
 
 @app.post("/chat/stream")
 async def chat_stream_endpoint(request: ChatRequest, http_request: Request, user: UserContext = Depends(resolve_user)):
