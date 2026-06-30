@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     QDRANT_URL: str = ""
     QDRANT_LOCATION: str = "./qdrant_data"
     COLLECTION_NAME: str = "support_docs"
+    DATA_DIR: str = "data/docs"
     
     # Embeddings Config
     DENSE_EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"
@@ -37,8 +38,8 @@ class Settings(BaseSettings):
 
     # Auth Config
     AUTH_ENABLED: bool = False
-    ADMIN_API_KEY: str = "local-admin-key"
-    USER_API_KEY: str = "local-user-key"
+    SECRET_KEY: str = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
 
     class Config:
         env_file = ".env"

@@ -7,9 +7,10 @@ class UserContext(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    api_key: str
+    username: str
+    password: str
 
 
-class LoginResponse(BaseModel):
-    role: str
-    token_type: str = "api_key"
+class Token(BaseModel):
+    access_token: str
+    token_type: str

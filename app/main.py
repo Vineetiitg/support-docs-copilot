@@ -9,8 +9,10 @@ from guardrails import Guard
 from langchain_core.prompts import PromptTemplate
 from langchain_ollama import ChatOllama
 
-from app.auth.models import LoginRequest, LoginResponse, UserContext
-from app.auth.security import require_admin, resolve_user
+from app.auth.models import Token, UserContext
+from app.auth.security import require_admin, resolve_user, create_access_token, verify_password, USERS
+from fastapi.security import OAuth2PasswordRequestForm
+from datetime import timedelta
 from app.core.config import settings
 from app.core.dependencies import check_ollama, check_qdrant
 from app.core.errors import CopilotError
@@ -78,13 +80,17 @@ async def ready_endpoint():
         "qdrant": qdrant,
     }
 
-@app.post("/auth/login", response_model=LoginResponse)
-async def login_endpoint(request: LoginRequest):
-    if request.api_key == settings.ADMIN_API_KEY:
-        return LoginResponse(role="admin")
-    if request.api_key == settings.USER_API_KEY:
-        return LoginResponse(role="user")
-    raise CopilotError("Invalid API key.", status_code=401)
+@app.post("/auth/login", response_model=Token)
+async def login_endpoint(form_data: OAuth2PasswordRequestForm = Depends()):
+    user = USERS.get(form_data.username)
+    if not user or not verify_password(form_data.password, user["password_hash"]):
+        raise CopilotError("Incorrect username or password", status_code=401)
+    
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": form_data.username, "role": user["role"]}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
 
 @app.get("/documents")
 async def documents_endpoint(user: UserContext = Depends(resolve_user)):
