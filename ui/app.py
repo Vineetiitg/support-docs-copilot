@@ -55,7 +55,7 @@ with chat_tab:
             try:
                 with requests.post(
                     BACKEND_STREAM_URL,
-                    json={"query": user_query},
+                    json={"query": user_query, "chat_history": st.session_state.messages[:-1]},
                     headers=headers(),
                     stream=True,
                     timeout=300,

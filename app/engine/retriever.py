@@ -23,11 +23,11 @@ def get_retriever():
     return ContextualCompressionRetriever(base_compressor=compressor, base_retriever=base_retriever)
 
 
-def retrieve_documents(question: str):
+def retrieve_documents(question: str, chat_history: list[dict] = None):
     retriever = get_retriever()
     documents = []
     seen = set()
-    for query in query_variants(question):
+    for query in query_variants(question, chat_history):
         for document in retriever.invoke(query):
             key = document.metadata.get("chunk_id") or document.page_content[:120]
             if key in seen:
@@ -36,7 +36,7 @@ def retrieve_documents(question: str):
             documents.append(document)
     logger.info(
         "retrieval completed query_count=%s returned_chunks=%s reranker_enabled=%s",
-        len(query_variants(question)),
+        len(query_variants(question, chat_history)),
         len(documents),
         settings.RERANKER_ENABLED,
     )

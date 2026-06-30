@@ -12,6 +12,7 @@ from app.engine.retriever import retrieve_documents
 
 class GraphState(TypedDict):
     question: str
+    chat_history: List[dict]
     generation: str
     documents: List[Document]
     sources: Optional[list[dict]]
@@ -23,8 +24,9 @@ llm_json = ChatOllama(model=settings.OLLAMA_MODEL, temperature=0, format="json",
 def retrieve(state: GraphState):
     logger.info("NODE: RETRIEVE DOCS")
     question = state["question"]
+    chat_history = state.get("chat_history", [])
     run_count = state.get("run_count", 0)
-    documents = retrieve_documents(question)
+    documents = retrieve_documents(question, chat_history)
     return {"documents": documents, "sources": source_citations(documents), "question": question, "run_count": run_count}
 
 def grade_documents(state: GraphState):
@@ -58,18 +60,24 @@ def generate(state: GraphState):
     logger.info("NODE: GENERATE ANSWER")
     question = state["question"]
     documents = state["documents"]
+    chat_history = state.get("chat_history", [])
     run_count = state.get("run_count", 0) + 1
     
+    history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in chat_history[-5:]])
     context = build_context(documents)
     prompt = PromptTemplate(
         template="""You are a Support Docs Copilot. Use only the retrieved context to answer the question concisely. If the context does not contain the answer, say "I don't know".
+        
+        Chat History:
+        {chat_history}
+        
         Question: {question} 
         Context: {context} 
         Answer:""",
-        input_variables=["question", "context"],
+        input_variables=["question", "context", "chat_history"],
     )
     rag_chain = prompt | llm
-    generation = rag_chain.invoke({"context": context, "question": question})
+    generation = rag_chain.invoke({"context": context, "question": question, "chat_history": history_str})
     return {"generation": generation.content, "sources": source_citations(documents), "run_count": run_count}
 
 def decide_to_generate(state: GraphState):

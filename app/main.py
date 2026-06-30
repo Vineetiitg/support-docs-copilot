@@ -49,6 +49,7 @@ input_guard = Guard().use(DetectPromptInjection, on_fail="exception")
 
 class ChatRequest(BaseModel):
     query: str
+    chat_history: list[dict] = []
 
 class SourceCitation(BaseModel):
     source: str
@@ -138,7 +139,7 @@ async def chat_endpoint(request: ChatRequest, http_request: Request, user: UserC
         except Exception as e:
             raise CopilotError(str(getattr(e, "message", e)), status_code=400)
 
-    initial_state = {"question": request.query, "run_count": 0}
+    initial_state = {"question": request.query, "chat_history": request.chat_history, "run_count": 0}
     try:
         with timed_stage(metrics, "rag_workflow"):
             final_state = rag_agent.invoke(initial_state)
@@ -162,7 +163,7 @@ async def chat_stream_endpoint(request: ChatRequest, http_request: Request, user
 
     async def token_generator():
         metrics = RequestMetrics()
-        initial_state = {"question": request.query, "run_count": 0}
+        initial_state = {"question": request.query, "chat_history": request.chat_history, "run_count": 0}
         with timed_stage(metrics, "rag_workflow"):
             final_state = rag_agent.invoke(initial_state)
         documents = final_state.get("documents", [])
@@ -171,17 +172,22 @@ async def chat_stream_endpoint(request: ChatRequest, http_request: Request, user
             yield "I am sorry, no reliable matching documentation was found."
             return
 
+        history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in request.chat_history[-5:]])
         context = build_context(documents)
         prompt = PromptTemplate(
             template="""You are a Support Docs Copilot. Use only the retrieved context to answer the question concisely. If you don't know the answer, say "I don't know".
+            
+            Chat History:
+            {chat_history}
+            
             Question: {question} 
             Context: {context} \n\nAnswer:""",
-            input_variables=["question", "context"],
+            input_variables=["question", "context", "chat_history"],
         )
         async_llm = ChatOllama(model=settings.OLLAMA_MODEL, temperature=0, base_url=settings.OLLAMA_BASE_URL)
         rag_chain = prompt | async_llm
 
-        async for chunk in rag_chain.astream({"context": context, "question": request.query}):
+        async for chunk in rag_chain.astream({"context": context, "question": request.query, "chat_history": history_str}):
             if chunk.content:
                 yield redact_sensitive_data(chunk.content)
                 await asyncio.sleep(0.01)

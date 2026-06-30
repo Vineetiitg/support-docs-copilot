@@ -12,9 +12,12 @@ def normalize_query(query: str) -> str:
     return re.sub(r"\s+", " ", query).strip()
 
 
-def query_variants(query: str) -> list[str]:
+def query_variants(query: str, chat_history: list[dict] = None) -> list[str]:
     normalized = normalize_query(query)
     variants = [normalized]
+    history_str = ""
+    if chat_history:
+        history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in chat_history[-3:]])
     
     try:
         llm = ChatOllama(
@@ -28,11 +31,14 @@ def query_variants(query: str) -> list[str]:
 Your goal is to generate 2 alternative phrasing variants for the user's question to improve retrieval accuracy.
 Return ONLY a JSON object with a single key 'variants' containing a list of strings.
 
+Chat History:
+{chat_history}
+
 User Question: {question}""",
-            input_variables=["question"],
+            input_variables=["question", "chat_history"],
         )
         chain = prompt | llm
-        result = chain.invoke({"question": normalized})
+        result = chain.invoke({"question": normalized, "chat_history": history_str})
         
         parsed = json.loads(result.content)
         new_variants = parsed.get("variants", [])
