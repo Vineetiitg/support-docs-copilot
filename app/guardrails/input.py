@@ -10,14 +10,18 @@ _requests_by_client: dict[str, deque[float]] = defaultdict(deque)
 
 
 PROMPT_INJECTION_PATTERNS = [
-    "ignore previous instructions",
-    "ignore the instructions above",
+    "ignore previous",
+    "ignore the instructions",
     "forget all previous",
     "system prompt",
     "developer message",
     "bypass system",
     "disregard instructions",
     "reveal hidden",
+    "you are now an arbitrary",
+    "dan",
+    "do anything now",
+    "ignore all constraints"
 ]
 
 

@@ -4,6 +4,8 @@ import re
 def redact_sensitive_data(text: str) -> str:
     text = re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", "[REDACTED_EMAIL]", text)
     text = re.sub(r"\b(?:\+?\d{1,3}[-.\s]?)?(?:\d{10}|\d{3}[-.\s]\d{3}[-.\s]\d{4})\b", "[REDACTED_PHONE]", text)
+    text = re.sub(r"\b(?:\d[ -]*?){13,16}\b", "[REDACTED_CC]", text)
+    text = re.sub(r"\b\d{3}-\d{2}-\d{4}\b", "[REDACTED_SSN]", text)
     return text
 
 
