@@ -1,4 +1,16 @@
+---
+title: Support Docs Copilot
+emoji: 🤖
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+pinned: false
+license: mit
+---
+
 # Support Docs Copilot
+
+[![Live Demo on HuggingFace](https://img.shields.io/badge/🤗%20Live%20Demo-HuggingFace%20Spaces-blue)](https://huggingface.co/spaces/vineet88/support-docs-copilot)
 
 A lightweight, production-ready advanced RAG support copilot using OpenRouter free LLM APIs (`google/gemma-4-31b-it:free`), Qdrant dense retrieval, FastEmbed CPU-only embeddings, LangGraph Self-RAG, Guardrails AI, Ragas evaluation, FastAPI, and Streamlit.
 
