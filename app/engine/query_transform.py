@@ -2,7 +2,7 @@ import json
 import re
 
 from langchain_core.prompts import PromptTemplate
-from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
 
 from app.core.config import settings
 from app.core.logging import logger
@@ -12,7 +12,7 @@ def normalize_query(query: str) -> str:
     return re.sub(r"\s+", " ", query).strip()
 
 
-def query_variants(query: str, chat_history: list[dict] = None) -> list[str]:
+async def query_variants(query: str, chat_history: list[dict] = None) -> list[str]:
     normalized = normalize_query(query)
     variants = [normalized]
     history_str = ""
@@ -20,11 +20,12 @@ def query_variants(query: str, chat_history: list[dict] = None) -> list[str]:
         history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in chat_history[-3:]])
     
     try:
-        llm = ChatOllama(
-            model=settings.OLLAMA_MODEL, 
-            temperature=0, 
-            format="json", 
-            base_url=settings.OLLAMA_BASE_URL
+        llm = ChatOpenAI(
+            model=settings.LLM_MODEL,
+            temperature=0,
+            openai_api_key=settings.OPENROUTER_API_KEY,
+            openai_api_base=settings.OPENROUTER_BASE_URL,
+            default_headers={"HTTP-Referer": "https://localhost:3000", "X-Title": "Support Docs Copilot"},
         )
         prompt = PromptTemplate(
             template="""You are an expert technical support assistant. 
@@ -38,7 +39,7 @@ User Question: {question}""",
             input_variables=["question", "chat_history"],
         )
         chain = prompt | llm
-        result = chain.invoke({"question": normalized, "chat_history": history_str})
+        result = await chain.ainvoke({"question": normalized, "chat_history": history_str})
         
         parsed = json.loads(result.content)
         new_variants = parsed.get("variants", [])

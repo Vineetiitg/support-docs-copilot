@@ -1,3 +1,6 @@
 question,expected_answer,expected_sources
 What is Error Code 404?,Error Code 404 indicates that the requested server resource was not found and the router configuration should be checked.,sample_error.txt
 What does this support copilot do?,The support copilot answers support questions using indexed documentation and retrieved context.,product_guide.txt
+How do I reset my password?,You can reset your password by clicking on the 'Forgot Password' link on the login page and following the instructions sent to your email.,auth_guide.txt
+What is the default rate limit?,The default API rate limit is 100 requests per minute per IP address.,api_docs.txt
+How can I contact support?,You can contact support by emailing support@example.com or calling 1-800-555-0199.,contact_info.txt

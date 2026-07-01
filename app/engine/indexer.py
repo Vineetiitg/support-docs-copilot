@@ -35,24 +35,29 @@ def collection_exists() -> bool:
 
 
 def open_vector_store(validate_collection_config: bool = True) -> QdrantVectorStore:
+    if not collection_exists():
+        from langchain_core.documents import Document
+        index_documents([Document(page_content="Welcome to Support Docs Copilot knowledge base.", metadata={"doc_id": "init"})], force_recreate=True)
+    mode = retrieval_mode()
     return QdrantVectorStore(
         client=get_qdrant_client(),
         collection_name=settings.COLLECTION_NAME,
         embedding=dense_embeddings(),
-        sparse_embedding=sparse_embeddings(),
-        retrieval_mode=retrieval_mode(),
+        sparse_embedding=sparse_embeddings() if mode != RetrievalMode.DENSE else None,
+        retrieval_mode=mode,
         validate_collection_config=validate_collection_config,
     )
 
 
 def index_documents(documents, force_recreate: bool = False) -> None:
     if force_recreate or not collection_exists():
+        mode = retrieval_mode()
         QdrantVectorStore.from_documents(
             documents,
             embedding=dense_embeddings(),
-            sparse_embedding=sparse_embeddings(),
+            sparse_embedding=sparse_embeddings() if mode != RetrievalMode.DENSE else None,
             collection_name=settings.COLLECTION_NAME,
-            retrieval_mode=retrieval_mode(),
+            retrieval_mode=mode,
             force_recreate=force_recreate,
             **qdrant_store_options(),
         )

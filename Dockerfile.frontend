@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir streamlit requests
+RUN --mount=type=cache,target=/root/.cache/pip pip install --default-timeout=1000 streamlit requests
 
 COPY ./ui /app/ui
 

@@ -7,10 +7,6 @@ __pycache__/
 .env
 qdrant_data/
 data/document_registry.json
-tests/
-reports/
-datasets/
-ui/
 *.md
 .python/
 *.log

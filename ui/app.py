@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import requests
 import streamlit as st
@@ -124,12 +125,24 @@ with admin_tab:
                 st.error(f"Reset failed: {exc}")
 
 with evaluation_tab:
-    st.code(r".\.venv\Scripts\python.exe -m app.tests.eval_rag", language="powershell")
-    report_path = Path("reports/eval_report.md")
-    if report_path.exists():
-        st.markdown(report_path.read_text(encoding="utf-8"))
-    else:
-        st.info("Run the evaluation command to generate the report.")
+    st.subheader("Automated Quality Assessment (RAGAS)")
+    st.write("Evaluate how accurately and faithfully the copilot answers support questions using the RAGAS framework.")
+    
+    if st.button("🚀 Run RAG Evaluation Now", type="primary"):
+        with st.spinner("Running automated RAG evaluation against test questions... This may take 1-2 minutes."):
+            try:
+                res = post_json("/admin/eval")
+                st.success("Evaluation completed successfully!")
+            except requests.RequestException as exc:
+                st.error(f"Evaluation failed: {exc}. Ensure you are logged in as admin under Settings and have remaining OpenRouter credits/limits.")
+    
+    st.divider()
+    st.subheader("Latest Evaluation Report")
+    try:
+        res = get_json("/admin/eval")
+        st.markdown(res.get("report", "No evaluation report available."))
+    except requests.RequestException:
+        st.info("No evaluation report available yet. Click the button above to run your first evaluation!")
 
 with settings_tab:
     st.subheader("Login")
@@ -145,6 +158,11 @@ with settings_tab:
                 st.error("Login failed.")
         except requests.RequestException as exc:
             st.error(f"Login request failed: {exc}")
+
+    st.divider()
+    st.subheader("Observability & Tracing (LangSmith)")
+    st.write("Monitor RAG agent steps, prompt tokens, and latency in real-time by adding these variables to your `.env`:")
+    st.code("LANGCHAIN_TRACING_V2=true\nLANGCHAIN_API_KEY=your_langsmith_api_key\nLANGCHAIN_PROJECT=\"Support Docs Copilot\"", language="env")
 
     st.divider()
     st.caption(f"Backend base URL: {BACKEND_BASE_URL}")

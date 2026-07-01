@@ -1,9 +1,5 @@
 import logging
 
-from langchain.retrievers import ContextualCompressionRetriever
-from langchain.retrievers.document_compressors import CrossEncoderReranker
-from langchain_community.cross_encoders import HuggingFaceCrossEncoder
-
 from app.core.config import settings
 from app.engine.indexer import open_vector_store
 from app.engine.query_transform import query_variants
@@ -13,22 +9,16 @@ logger = logging.getLogger(__name__)
 
 def get_retriever():
     qdrant = open_vector_store()
-    base_retriever = qdrant.as_retriever(search_kwargs={"k": settings.RETRIEVAL_TOP_K})
-
-    if not settings.RERANKER_ENABLED:
-        return base_retriever
-
-    model = HuggingFaceCrossEncoder(model_name=settings.RERANKER_MODEL)
-    compressor = CrossEncoderReranker(model=model, top_n=settings.RERANKER_TOP_N)
-    return ContextualCompressionRetriever(base_compressor=compressor, base_retriever=base_retriever)
+    return qdrant.as_retriever(search_kwargs={"k": settings.RETRIEVAL_TOP_K})
 
 
-def retrieve_documents(question: str, chat_history: list[dict] = None):
+async def retrieve_documents(question: str, chat_history: list[dict] = None):
     retriever = get_retriever()
     documents = []
     seen = set()
-    for query in query_variants(question, chat_history):
-        for document in retriever.invoke(query):
+    variants = await query_variants(question, chat_history)
+    for query in variants:
+        for document in await retriever.ainvoke(query):
             key = document.metadata.get("chunk_id") or document.page_content[:120]
             if key in seen:
                 continue
@@ -36,7 +26,7 @@ def retrieve_documents(question: str, chat_history: list[dict] = None):
             documents.append(document)
     logger.info(
         "retrieval completed query_count=%s returned_chunks=%s reranker_enabled=%s",
-        len(query_variants(question, chat_history)),
+        len(variants),
         len(documents),
         settings.RERANKER_ENABLED,
     )

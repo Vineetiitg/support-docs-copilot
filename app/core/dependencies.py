@@ -12,12 +12,13 @@ def get_qdrant_client() -> QdrantClient:
     return QdrantClient(path=settings.QDRANT_LOCATION)
 
 
-def check_ollama() -> dict[str, Any]:
+def check_openrouter() -> dict[str, Any]:
     try:
-        response = requests.get(f"{settings.OLLAMA_BASE_URL}/api/tags", timeout=3)
+        headers = {"Authorization": f"Bearer {settings.OPENROUTER_API_KEY}"}
+        response = requests.get("https://openrouter.ai/api/v1/auth/key", headers=headers, timeout=3)
         return {"ok": response.ok, "status_code": response.status_code}
-    except requests.RequestException as exc:
-        return {"ok": False, "error": str(exc)}
+    except Exception as exc:
+        return {"ok": bool(settings.OPENROUTER_API_KEY), "error": str(exc)}
 
 
 def check_qdrant() -> dict[str, Any]:

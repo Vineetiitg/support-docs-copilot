@@ -2,7 +2,7 @@ import json
 from typing import List, Optional, TypedDict
 from langchain_core.prompts import PromptTemplate
 from langchain_core.documents import Document
-from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
 from langgraph.graph import START, END, StateGraph
 
 from app.core.config import settings
@@ -20,18 +20,30 @@ class GraphState(TypedDict):
     confidence_score: float
     grounded: str
 
-llm = ChatOllama(model=settings.OLLAMA_MODEL, temperature=0, base_url=settings.OLLAMA_BASE_URL)
-llm_json = ChatOllama(model=settings.OLLAMA_MODEL, temperature=0, format="json", base_url=settings.OLLAMA_BASE_URL)
+llm = ChatOpenAI(
+    model=settings.LLM_MODEL,
+    temperature=0,
+    openai_api_key=settings.OPENROUTER_API_KEY,
+    openai_api_base=settings.OPENROUTER_BASE_URL,
+    default_headers={"HTTP-Referer": "https://localhost:3000", "X-Title": "Support Docs Copilot"},
+)
+llm_json = ChatOpenAI(
+    model=settings.LLM_MODEL,
+    temperature=0,
+    openai_api_key=settings.OPENROUTER_API_KEY,
+    openai_api_base=settings.OPENROUTER_BASE_URL,
+    default_headers={"HTTP-Referer": "https://localhost:3000", "X-Title": "Support Docs Copilot"},
+)
 
-def retrieve(state: GraphState):
+async def retrieve(state: GraphState):
     logger.info("NODE: RETRIEVE DOCS")
     question = state["question"]
     chat_history = state.get("chat_history", [])
     run_count = state.get("run_count", 0)
-    documents = retrieve_documents(question, chat_history)
+    documents = await retrieve_documents(question, chat_history)
     return {"documents": documents, "sources": source_citations(documents), "question": question, "run_count": run_count}
 
-def grade_documents(state: GraphState):
+async def grade_documents(state: GraphState):
     logger.info("NODE: GRADE DOCUMENT RELEVANCE")
     question = state["question"]
     documents = state.get("documents", [])
@@ -48,7 +60,7 @@ def grade_documents(state: GraphState):
     
     filtered_docs = []
     for d in documents:
-        result = grader.invoke({"question": question, "document": d.page_content})
+        result = await grader.ainvoke({"question": question, "document": d.page_content})
         try:
             grade = json.loads(result.content).get("score", "no")
         except:
@@ -58,7 +70,7 @@ def grade_documents(state: GraphState):
             
     return {"documents": filtered_docs}
 
-def generate(state: GraphState):
+async def generate(state: GraphState):
     logger.info("NODE: GENERATE ANSWER")
     question = state["question"]
     documents = state["documents"]
@@ -79,17 +91,17 @@ def generate(state: GraphState):
         input_variables=["question", "context", "chat_history"],
     )
     rag_chain = prompt | llm
-    generation = rag_chain.invoke({"context": context, "question": question, "chat_history": history_str})
+    generation = await rag_chain.ainvoke({"context": context, "question": question, "chat_history": history_str})
     return {"generation": generation.content, "sources": source_citations(documents), "run_count": run_count}
 
-def decide_to_generate(state: GraphState):
+async def decide_to_generate(state: GraphState):
     if not state["documents"]:
         logger.info("ROUTE: ALL DOCS IRRELEVANT")
         return "end"
     logger.info("ROUTE: RELEVANT DOCS FOUND")
     return "generate"
 
-def evaluate_answer(state: GraphState):
+async def evaluate_answer(state: GraphState):
     logger.info("NODE: EVALUATE ANSWER")
     documents = state["documents"]
     generation = state["generation"]
@@ -105,7 +117,7 @@ def evaluate_answer(state: GraphState):
     )
     grader = prompt | llm_json
     
-    result = grader.invoke({"context": context, "generation": generation})
+    result = await grader.ainvoke({"context": context, "generation": generation})
     try:
         parsed = json.loads(result.content)
         grade = parsed.get("score", "yes")
@@ -116,7 +128,7 @@ def evaluate_answer(state: GraphState):
         
     return {"grounded": grade, "confidence_score": confidence}
 
-def check_hallucinations(state: GraphState):
+async def check_hallucinations(state: GraphState):
     run_count = state["run_count"]
     
     if run_count >= 3:

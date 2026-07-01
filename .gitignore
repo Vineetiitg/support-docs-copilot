@@ -19,3 +19,13 @@ reports/*.html
 reports/*.json
 data/document_registry.json
 
+# IDE and Agent metadata
+.gemini/
+.agents/
+brain/
+.idea/
+.vscode/
+*.sh
+.DS_Store
+*.lock
+
