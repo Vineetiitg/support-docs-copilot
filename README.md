@@ -14,6 +14,90 @@ license: mit
 
 A lightweight, production-ready advanced RAG support copilot using OpenRouter free LLM APIs (`google/gemma-4-31b-it:free`), Qdrant dense retrieval, FastEmbed CPU-only embeddings, LangGraph Self-RAG, Guardrails AI, Ragas evaluation, FastAPI, and Streamlit.
 
+## 🧩 Tech Stack
+
+![Python](https://img.shields.io/badge/Python-3.11-blue?logo=python)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.110-009688?logo=fastapi)
+![LangGraph](https://img.shields.io/badge/LangGraph-Self--RAG-orange?logo=langchain)
+![Qdrant](https://img.shields.io/badge/Qdrant-Vector%20DB-red?logo=qdrant)
+![Streamlit](https://img.shields.io/badge/Streamlit-1.32-FF4B4B?logo=streamlit)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker)
+![Guardrails](https://img.shields.io/badge/Guardrails%20AI-Security-green)
+![RAGAS](https://img.shields.io/badge/RAGAS-Evaluation-purple)
+
+---
+
+## 🏗️ System Architecture
+
+```mermaid
+flowchart TB
+    subgraph Client["🖥️ Client Layer"]
+        UI["Streamlit Chat UI<br/>Port 8501"]
+    end
+
+    subgraph API["⚡ API Layer (FastAPI)"]
+        Auth["JWT Auth + RBAC"]
+        Guard["Input Guardrails<br/>Prompt Injection · Rate Limit"]
+        Chat["/chat Endpoint"]
+        Stream["/chat/stream Endpoint"]
+        Admin["Admin Endpoints<br/>Ingest · Upload · Reset · Eval"]
+    end
+
+    subgraph Agent["🧠 LangGraph Self-RAG Agent"]
+        direction TB
+        Retrieve["1. Retrieve<br/>Qdrant Hybrid Search"]
+        Grade["2. Grade Documents<br/>LLM Relevance Scoring"]
+        Generate["3. Generate Answer<br/>Context-Grounded LLM"]
+        Evaluate["4. Evaluate Answer<br/>Hallucination Detection"]
+    end
+
+    subgraph Storage["🗄️ Data Layer"]
+        Qdrant["Qdrant Vector DB<br/>Dense + Sparse Vectors"]
+        Embed["FastEmbed ONNX<br/>CPU-Only Embeddings"]
+    end
+
+    subgraph Safety["🛡️ Output Safety"]
+        Redact["PII Redaction<br/>SSN · CC · Email · Phone"]
+    end
+
+    subgraph Observe["📊 Observability"]
+        LangSmith["LangSmith Tracing"]
+        Metrics["Latency Metrics"]
+        RAGAS["RAGAS Benchmarks<br/>Faithfulness · Relevancy"]
+    end
+
+    UI -->|HTTP + Streaming| Auth
+    Auth --> Guard
+    Guard --> Chat & Stream
+    Chat & Stream --> Retrieve
+    Retrieve -->|Query| Qdrant
+    Qdrant -->|Chunks| Retrieve
+    Embed -.->|Embeddings| Qdrant
+    Retrieve --> Grade
+    Grade -->|Relevant| Generate
+    Grade -->|"All Irrelevant"| UI
+    Generate --> Evaluate
+    Evaluate -->|"Grounded ✅"| Redact
+    Evaluate -->|"Hallucinated 🔄"| Generate
+    Redact --> UI
+    Admin -->|Ingest Docs| Embed
+    Chat & Stream -.-> LangSmith & Metrics
+    Admin -.-> RAGAS
+```
+
+### Self-RAG Workflow (Cyclic Decision Graph)
+
+```mermaid
+stateDiagram-v2
+    [*] --> Retrieve: User Query
+    Retrieve --> GradeDocuments: Retrieved Chunks
+    GradeDocuments --> Generate: Relevant Docs Found
+    GradeDocuments --> [*]: All Docs Irrelevant
+    Generate --> EvaluateAnswer: Generated Response
+    EvaluateAnswer --> [*]: Grounded (confidence ≥ threshold)
+    EvaluateAnswer --> Generate: Hallucination Detected (max 3 retries)
+```
+
 ## 🌟 Why Scenario B? (Lightweight & Cloud-Ready)
 This project has been optimized to remove all heavy GPU and PyTorch/Ollama dependencies:
 - **No Multi-GB Downloads:** Uses OpenRouter API for LLM inference, removing the need for local Ollama weights.
