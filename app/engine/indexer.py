@@ -6,12 +6,6 @@ from app.core.config import settings
 from app.core.dependencies import get_qdrant_client
 
 
-def qdrant_store_options() -> dict:
-    if settings.QDRANT_URL:
-        return {"url": settings.QDRANT_URL}
-    return {"path": settings.QDRANT_LOCATION}
-
-
 def retrieval_mode() -> RetrievalMode:
     mode = settings.RETRIEVAL_MODE.lower()
     if mode == "dense":
@@ -21,12 +15,21 @@ def retrieval_mode() -> RetrievalMode:
     return RetrievalMode.HYBRID
 
 
+_dense_embedder = None
+_sparse_embedder = None
+
 def dense_embeddings() -> FastEmbedEmbeddings:
-    return FastEmbedEmbeddings(model_name=settings.DENSE_EMBEDDING_MODEL)
+    global _dense_embedder
+    if _dense_embedder is None:
+        _dense_embedder = FastEmbedEmbeddings(model_name=settings.DENSE_EMBEDDING_MODEL)
+    return _dense_embedder
 
 
 def sparse_embeddings() -> FastEmbedSparse:
-    return FastEmbedSparse(model_name=settings.SPARSE_EMBEDDING_MODEL)
+    global _sparse_embedder
+    if _sparse_embedder is None:
+        _sparse_embedder = FastEmbedSparse(model_name=settings.SPARSE_EMBEDDING_MODEL)
+    return _sparse_embedder
 
 
 def collection_exists() -> bool:
@@ -52,6 +55,7 @@ def open_vector_store(validate_collection_config: bool = True) -> QdrantVectorSt
 def index_documents(documents, force_recreate: bool = False) -> None:
     if force_recreate or not collection_exists():
         mode = retrieval_mode()
+        url_or_path_kwarg = {"url": settings.QDRANT_URL} if settings.QDRANT_URL else {"path": settings.QDRANT_LOCATION}
         QdrantVectorStore.from_documents(
             documents,
             embedding=dense_embeddings(),
@@ -59,7 +63,7 @@ def index_documents(documents, force_recreate: bool = False) -> None:
             collection_name=settings.COLLECTION_NAME,
             retrieval_mode=mode,
             force_recreate=force_recreate,
-            **qdrant_store_options(),
+            **url_or_path_kwarg,
         )
         return
 

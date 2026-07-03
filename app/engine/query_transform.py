@@ -21,7 +21,7 @@ async def query_variants(query: str, chat_history: list[dict] = None) -> list[st
     
     try:
         llm = ChatOpenAI(
-            model=settings.LLM_MODEL,
+            model=getattr(settings, "FAST_LLM_MODEL", settings.LLM_MODEL),
             temperature=0,
             openai_api_key=settings.OPENROUTER_API_KEY,
             openai_api_base=settings.OPENROUTER_BASE_URL,
@@ -53,3 +53,40 @@ User Question: {question}""",
         logger.warning(f"Failed to generate query variants with LLM: {e}")
         
     return list(dict.fromkeys(variants))
+
+
+async def condense_query(query: str, chat_history: list[dict] = None) -> str:
+    if not chat_history:
+        return normalize_query(query)
+        
+    normalized = normalize_query(query)
+    history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in chat_history[-6:]])
+    
+    try:
+        llm = ChatOpenAI(
+            model=getattr(settings, "FAST_LLM_MODEL", settings.LLM_MODEL),
+            temperature=0,
+            openai_api_key=settings.OPENROUTER_API_KEY,
+            openai_api_base=settings.OPENROUTER_BASE_URL,
+            default_headers={"HTTP-Referer": "https://localhost:3000", "X-Title": "Support Docs Copilot"},
+        )
+        prompt = PromptTemplate(
+            template="""Given the following chat history and a follow-up question, rewrite the follow-up question into a standalone query that can be understood without the chat history. Do not answer the question, just reformulate it. If the follow-up question is already standalone, return it unchanged.
+
+Chat History:
+{chat_history}
+
+Follow Up Question: {question}
+Standalone Query:""",
+            input_variables=["question", "chat_history"],
+        )
+        chain = prompt | llm
+        result = await chain.ainvoke({"question": normalized, "chat_history": history_str})
+        standalone = result.content.strip()
+        if standalone:
+            logger.debug(f"Condensed query: '{query}' -> '{standalone}'")
+            return standalone
+    except Exception as e:
+        logger.warning(f"Failed to condense query with LLM: {e}")
+        
+    return normalized

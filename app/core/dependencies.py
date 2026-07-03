@@ -1,3 +1,4 @@
+import threading
 from typing import Any
 
 import requests
@@ -5,11 +6,19 @@ from qdrant_client import QdrantClient
 
 from app.core.config import settings
 
+_qdrant_client: QdrantClient | None = None
+_client_lock = threading.Lock()
+
 
 def get_qdrant_client() -> QdrantClient:
-    if settings.QDRANT_URL:
-        return QdrantClient(url=settings.QDRANT_URL)
-    return QdrantClient(path=settings.QDRANT_LOCATION)
+    global _qdrant_client
+    with _client_lock:
+        if _qdrant_client is None:
+            if settings.QDRANT_URL:
+                _qdrant_client = QdrantClient(url=settings.QDRANT_URL)
+            else:
+                _qdrant_client = QdrantClient(path=settings.QDRANT_LOCATION)
+        return _qdrant_client
 
 
 def check_openrouter() -> dict[str, Any]:

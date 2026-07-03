@@ -13,11 +13,51 @@ services:
       dockerfile: Dockerfile.backend
     ports:
       - "8000:8000"
+    volumes:
+      - ./app:/app/app
+      - ./tests:/app/tests
+      - ./datasets:/app/datasets
+      - ./data:/app/data
+      - ./reports:/app/reports
+    env_file:
+      - .env
     environment:
       - QDRANT_URL=http://qdrant:6333
+      - REDIS_URL=redis://redis:6379/0
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
     depends_on:
       - qdrant
+      - redis
+    restart: always
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_storage:/data
+    restart: always
+
+  worker:
+    build: 
+      context: .
+      dockerfile: Dockerfile.backend
+    command: arq app.worker.WorkerSettings
+    volumes:
+      - ./app:/app/app
+      - ./tests:/app/tests
+      - ./datasets:/app/datasets
+      - ./data:/app/data
+      - ./reports:/app/reports
+    env_file:
+      - .env
+    environment:
+      - QDRANT_URL=http://qdrant:6333
+      - REDIS_URL=redis://redis:6379/0
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+    depends_on:
+      - qdrant
+      - redis
     restart: always
 
   frontend:
@@ -26,6 +66,8 @@ services:
       dockerfile: Dockerfile.frontend
     ports:
       - "8501:8501"
+    volumes:
+      - ./ui:/app/ui
     environment:
       - BACKEND_BASE_URL=http://backend:8000
     depends_on:
@@ -34,3 +76,4 @@ services:
 
 volumes:
   qdrant_storage:
+  redis_storage:

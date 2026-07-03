@@ -1,9 +1,8 @@
 import os
+import time
 from pathlib import Path
-
 import requests
 import streamlit as st
-
 
 st.set_page_config(page_title="Support Docs Copilot", page_icon="SD", layout="wide")
 st.title("Support Docs Copilot")
@@ -16,6 +15,10 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "token" not in st.session_state:
     st.session_state.token = ""
+if "role" not in st.session_state:
+    st.session_state.role = ""
+if "username" not in st.session_state:
+    st.session_state.username = ""
 
 
 def headers() -> dict:
@@ -36,11 +39,78 @@ def post_json(path: str, payload: dict | None = None) -> dict:
     return response.json()
 
 
-chat_tab, documents_tab, admin_tab, evaluation_tab, settings_tab = st.tabs(
-    ["Chat", "Documents", "Admin", "Evaluation", "Settings"]
-)
+def poll_job_status(job_id: str, status_text: str = "Processing in background..."):
+    with st.status(status_text, expanded=True) as status:
+        st.write("Job enqueued in Redis...")
+        for _ in range(120):
+            try:
+                res = get_json(f"/tasks/status/{job_id}")
+                job_status = res.get("status", "unknown")
+                st.write(f"Status: **{job_status}**")
+                if err_msg := res.get("error"):
+                    st.error(f"Error details: {err_msg}")
+                if job_status in ("complete", "success"):
+                    status.update(label="Job Completed Successfully!", state="complete", expanded=False)
+                    return res.get("result")
+                elif job_status in ("not_found", "error", "failed", "error_try_again"):
+                    status.update(label=f"Job Finished ({job_status})", state="complete" if job_status == "complete" else "error", expanded=True)
+                    return res.get("result")
+            except Exception:
+                pass
+            time.sleep(1.5)
+        status.update(label="Job Timed Out / Still Running", state="error")
+    return None
 
-with chat_tab:
+
+# Authentication Sidebar
+with st.sidebar:
+    st.subheader("🔐 Authentication")
+    if st.session_state.token and st.session_state.role:
+        if st.session_state.role == "admin":
+            st.success(f"Logged in as: **{st.session_state.username or 'Admin'}**\n\nRole: **👑 Administrator**")
+        else:
+            st.info(f"Logged in as: **{st.session_state.username or 'User'}**\n\nRole: **👤 User**")
+        if st.button("🚪 Logout", use_container_width=True):
+            st.session_state.token = ""
+            st.session_state.role = ""
+            st.session_state.username = ""
+            st.rerun()
+    else:
+        st.write("Login to access role-specific UI features.")
+        username_input = st.text_input("Username", key="sb_user")
+        password_input = st.text_input("Password", type="password", key="sb_pass")
+        if st.button("🔑 Login", use_container_width=True, type="primary"):
+            try:
+                response = requests.post(
+                    f"{BACKEND_BASE_URL}/auth/login",
+                    data={"username": username_input, "password": password_input},
+                )
+                if response.ok:
+                    data = response.json()
+                    st.session_state.token = data.get("access_token", "")
+                    st.session_state.role = data.get("role", "user")
+                    st.session_state.username = username_input
+                    st.success("Logged in successfully!")
+                    st.rerun()
+                else:
+                    st.error("Invalid username or password.")
+            except requests.RequestException as exc:
+                st.error(f"Login request failed: {exc}")
+    
+    st.divider()
+    st.caption(f"Backend base URL: {BACKEND_BASE_URL}")
+    try:
+        ready_data = get_json("/ready")
+        if ready_data.get("ready"):
+            st.caption("🟢 Backend System Online")
+        else:
+            st.caption("🟡 Backend Degraded")
+    except Exception:
+        st.caption("🔴 Backend Offline")
+
+
+# Tab Renderers
+def render_chat_tab():
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
@@ -51,50 +121,56 @@ with chat_tab:
         st.session_state.messages.append({"role": "user", "content": user_query})
 
         with st.chat_message("assistant"):
-            response_placeholder = st.empty()
-            full_response = ""
             try:
-                with requests.post(
-                    BACKEND_STREAM_URL,
+                response = requests.post(
+                    f"{BACKEND_BASE_URL}/chat/stream",
                     json={"query": user_query, "chat_history": st.session_state.messages[:-1]},
                     headers=headers(),
                     stream=True,
-                    timeout=300,
-                ) as response:
-                    if response.status_code == 200:
-                        for chunk in response.iter_content(chunk_size=None, decode_unicode=True):
-                            if chunk:
-                                full_response += chunk
-                                response_placeholder.markdown(full_response + "...")
-                        response_placeholder.markdown(full_response)
-                    else:
-                        full_response = f"Request failed: {response.text}"
-                        response_placeholder.error(full_response)
+                    timeout=120,
+                )
+                response.raise_for_status()
+                
+                placeholder = st.empty()
+                full_answer = ""
+                for chunk in response.iter_content(chunk_size=1024, decode_unicode=True):
+                    if chunk:
+                        full_answer += chunk
+                        if "[CANCELLED:" in full_answer or "[CANCEL:" in full_answer:
+                            full_answer = "🚨 **[CANCELLED: This response violated safety guidelines and has been retracted.]**"
+                            placeholder.markdown(full_answer)
+                            break
+                        placeholder.markdown(full_answer + "▌")
+                placeholder.markdown(full_answer)
+                st.session_state.messages.append({"role": "assistant", "content": full_answer})
             except requests.RequestException as exc:
-                full_response = f"Backend connection error: {exc}"
-                response_placeholder.error(full_response)
+                st.error(f"Chat request failed: {exc}")
 
-        st.session_state.messages.append({"role": "assistant", "content": full_response})
 
-with documents_tab:
+def render_documents_tab():
+    st.subheader("Indexed Documents")
+    if st.button("Refresh list", key="ref_docs"):
+        st.rerun()
     try:
-        payload = get_json("/documents")
-        docs = payload.get("documents", [])
-        st.metric("Indexed documents", len(docs))
-        if docs:
-            st.dataframe(docs, use_container_width=True)
+        data = get_json("/documents")
+        documents = data.get("documents", [])
+        if not documents:
+            st.info("No indexed documents found.")
         else:
-            st.info("No indexed documents found. Upload documents in Admin and run ingestion.")
+            for doc in documents:
+                st.write(f"**{doc.get('source')}** | id={doc.get('doc_id')} | chunks={doc.get('chunk_count')}")
     except requests.RequestException as exc:
-        st.error(f"Unable to load documents: {exc}")
+        st.error(f"Failed to load documents: {exc}")
 
-with admin_tab:
+
+def render_admin_portal_tab():
+    st.subheader("Document Ingestion & Management")
     uploaded_files = st.file_uploader(
         "Upload support docs",
         type=["txt", "md", "pdf", "docx", "html", "htm"],
         accept_multiple_files=True,
     )
-    if uploaded_files and st.button("Save uploaded files"):
+    if uploaded_files and st.button("Save uploaded files", type="primary"):
         try:
             files = [("files", (file.name, file.getvalue(), file.type or "application/octet-stream")) for file in uploaded_files]
             response = requests.post(
@@ -109,32 +185,39 @@ with admin_tab:
         except requests.RequestException as exc:
             st.error(f"Upload failed: {exc}")
 
+    st.divider()
     col1, col2 = st.columns(2)
     with col1:
         force = st.checkbox("Force recreate index")
-        if st.button("Run ingestion"):
+        if st.button("Run ingestion", use_container_width=True):
             try:
-                st.json(post_json("/admin/ingest", {"data_dir": DATA_DIR, "force": force}))
+                res = post_json("/admin/ingest", {"data_dir": DATA_DIR, "force": force})
+                st.json(res)
+                if job_id := res.get("job_id"):
+                    poll_job_status(job_id, "Ingesting documents via Arq Worker...")
             except requests.RequestException as exc:
                 st.error(f"Ingestion failed: {exc}")
     with col2:
-        if st.button("Reset index"):
+        if st.button("Reset index", use_container_width=True):
             try:
                 st.json(post_json("/admin/reset"))
             except requests.RequestException as exc:
                 st.error(f"Reset failed: {exc}")
 
-with evaluation_tab:
+
+def render_evaluation_tab():
     st.subheader("Automated Quality Assessment (RAGAS)")
     st.write("Evaluate how accurately and faithfully the copilot answers support questions using the RAGAS framework.")
     
     if st.button("🚀 Run RAG Evaluation Now", type="primary"):
-        with st.spinner("Running automated RAG evaluation against test questions... This may take 1-2 minutes."):
-            try:
-                res = post_json("/admin/eval")
-                st.success("Evaluation completed successfully!")
-            except requests.RequestException as exc:
-                st.error(f"Evaluation failed: {exc}. Ensure you are logged in as admin under Settings and have remaining OpenRouter credits/limits.")
+        try:
+            res = post_json("/admin/eval")
+            st.json(res)
+            if job_id := res.get("job_id"):
+                poll_job_status(job_id, "Running RAGAS evaluation via Arq Worker... This may take 1-2 minutes.")
+            st.success("Evaluation task dispatched!")
+        except requests.RequestException as exc:
+            st.error(f"Evaluation failed: {exc}. Ensure you have remaining OpenRouter credits/limits.")
     
     st.divider()
     st.subheader("Latest Evaluation Report")
@@ -144,29 +227,55 @@ with evaluation_tab:
     except requests.RequestException:
         st.info("No evaluation report available yet. Click the button above to run your first evaluation!")
 
-with settings_tab:
-    st.subheader("Login")
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
-    if st.button("Login"):
-        try:
-            response = requests.post(f"{BACKEND_BASE_URL}/auth/login", data={"username": username, "password": password})
-            if response.ok:
-                st.session_state.token = response.json().get("access_token", "")
-                st.success("Logged in successfully.")
-            else:
-                st.error("Login failed.")
-        except requests.RequestException as exc:
-            st.error(f"Login request failed: {exc}")
 
-    st.divider()
+def render_langsmith_tab():
     st.subheader("Observability & Tracing (LangSmith)")
     st.write("Monitor RAG agent steps, prompt tokens, and latency in real-time by adding these variables to your `.env`:")
     st.code("LANGCHAIN_TRACING_V2=true\nLANGCHAIN_API_KEY=your_langsmith_api_key\nLANGCHAIN_PROJECT=\"Support Docs Copilot\"", language="env")
 
     st.divider()
+    st.subheader("System Readiness Diagnostics")
     st.caption(f"Backend base URL: {BACKEND_BASE_URL}")
     try:
         st.json(get_json("/ready"))
     except requests.RequestException as exc:
         st.error(f"Readiness check failed: {exc}")
+
+
+# Render Role-Specific UI Layouts
+if st.session_state.role == "admin":
+    chat_tab, docs_tab, admin_tab, eval_tab, langsmith_tab = st.tabs([
+        "💬 Chat Copilot", 
+        "📚 Documents", 
+        "🛠️ Admin Portal", 
+        "📊 RAGAS Evaluation", 
+        "📈 LangSmith & Observability"
+    ])
+    with chat_tab:
+        render_chat_tab()
+    with docs_tab:
+        render_documents_tab()
+    with admin_tab:
+        render_admin_portal_tab()
+    with eval_tab:
+        render_evaluation_tab()
+    with langsmith_tab:
+        render_langsmith_tab()
+else:
+    chat_tab, docs_tab, status_tab = st.tabs([
+        "💬 Chat Copilot", 
+        "📚 Documents", 
+        "⚙️ System Status"
+    ])
+    with chat_tab:
+        render_chat_tab()
+    with docs_tab:
+        render_documents_tab()
+    with status_tab:
+        st.subheader("System Status")
+        try:
+            st.json(get_json("/ready"))
+        except requests.RequestException as exc:
+            st.error(f"Readiness check failed: {exc}")
+        st.divider()
+        st.info("💡 **Admin Notice**: To access Document Ingestion, RAGAS Benchmarks, and LangSmith Observability tools, please login as an Administrator using the authentication sidebar on the left.")

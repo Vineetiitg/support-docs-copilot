@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.core.logging import logger
 from app.engine.context_builder import build_context, source_citations
 from app.engine.retriever import retrieve_documents
+from app.engine.reranker import rerank_documents, evaluate_nli_groundedness
 
 class GraphState(TypedDict):
     question: str
@@ -20,19 +21,37 @@ class GraphState(TypedDict):
     confidence_score: float
     grounded: str
 
+import httpx
+
+_http_client = httpx.AsyncClient(
+    http2=True,
+    limits=httpx.Limits(max_keepalive_connections=20, max_connections=50),
+    timeout=httpx.Timeout(60.0, connect=10.0),
+)
+
 llm = ChatOpenAI(
     model=settings.LLM_MODEL,
     temperature=0,
     openai_api_key=settings.OPENROUTER_API_KEY,
     openai_api_base=settings.OPENROUTER_BASE_URL,
     default_headers={"HTTP-Referer": "https://localhost:3000", "X-Title": "Support Docs Copilot"},
+    http_async_client=_http_client,
 )
 llm_json = ChatOpenAI(
-    model=settings.LLM_MODEL,
+    model=getattr(settings, "FAST_LLM_MODEL", settings.LLM_MODEL),
     temperature=0,
     openai_api_key=settings.OPENROUTER_API_KEY,
     openai_api_base=settings.OPENROUTER_BASE_URL,
     default_headers={"HTTP-Referer": "https://localhost:3000", "X-Title": "Support Docs Copilot"},
+    http_async_client=_http_client,
+)
+llm_slow = ChatOpenAI(
+    model=getattr(settings, "SLOW_LLM_MODEL", settings.LLM_MODEL),
+    temperature=0,
+    openai_api_key=settings.OPENROUTER_API_KEY,
+    openai_api_base=settings.OPENROUTER_BASE_URL,
+    default_headers={"HTTP-Referer": "https://localhost:3000", "X-Title": "Support Docs Copilot"},
+    http_async_client=_http_client,
 )
 
 async def retrieve(state: GraphState):
@@ -48,25 +67,51 @@ async def grade_documents(state: GraphState):
     question = state["question"]
     documents = state.get("documents", [])
     
+    reranked_docs = rerank_documents(question, documents, top_k=3)
+    if not reranked_docs:
+        return {"documents": []}
+        
+    top_score = reranked_docs[0].metadata.get("rerank_score", -10.0)
+    if top_score >= 0.0:
+        logger.info(f"High confidence Cross-Encoder score ({top_score:.4f} >= 0.0). Skipping LLM grader.")
+        return {"documents": reranked_docs}
+        
+    docs_text = "\n\n".join([f"[{idx+1}] ID: {d.metadata.get('doc_id', idx+1)}\nContent: {d.page_content}" for idx, d in enumerate(reranked_docs)])
     prompt = PromptTemplate(
-        template="""You are a strict grader assessing relevance of a retrieved document to a user question.
-        Document: \n\n {document} \n\n
-        Question: {question} \n
-        If the document contains keywords or semantic meaning related to the question, grade it as 'yes'. Otherwise, 'no'.
-        Provide a JSON with a single key 'score' and value 'yes' or 'no'.""",
-        input_variables=["question", "document"],
+        template="""You are a strict grader assessing relevance of retrieved documents to a user question.
+        User Question: {question}
+        
+        Retrieved Documents:
+        {docs_text}
+        
+        For each document [1] to [{count}], assess if it contains keywords or semantic meaning relevant to the question.
+        Return ONLY a JSON object with a key 'results' containing a list of objects: [{{"id": 1, "relevant": true}}, ...].""",
+        input_variables=["question", "docs_text", "count"],
     )
     grader = prompt | llm_json
+    result = await grader.ainvoke({"question": question, "docs_text": docs_text, "count": len(reranked_docs)})
     
     filtered_docs = []
-    for d in documents:
-        result = await grader.ainvoke({"question": question, "document": d.page_content})
-        try:
-            grade = json.loads(result.content).get("score", "no")
-        except:
-            grade = "no"
-        if grade.lower() == "yes":
-            filtered_docs.append(d)
+    try:
+        parsed = json.loads(result.content)
+        results = parsed.get("results", [])
+        relevant_indices = set()
+        for r in results:
+            if r.get("relevant") is True or str(r.get("relevant")).lower() == "true":
+                idx_val = r.get("id")
+                if isinstance(idx_val, int) and 1 <= idx_val <= len(reranked_docs):
+                    relevant_indices.add(idx_val - 1)
+        for i, d in enumerate(reranked_docs):
+            if i in relevant_indices:
+                filtered_docs.append(d)
+    except Exception as e:
+        logger.warning(f"Batch grading parse failed ({e}), keeping all {len(reranked_docs)} reranked docs.")
+        filtered_docs = reranked_docs
+        
+    if not filtered_docs and reranked_docs:
+        top_score = reranked_docs[0].metadata.get("rerank_score", 0)
+        if top_score > 0.0:
+            filtered_docs = [reranked_docs[0]]
             
     return {"documents": filtered_docs}
 
@@ -80,7 +125,10 @@ async def generate(state: GraphState):
     history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in chat_history[-5:]])
     context = build_context(documents)
     prompt = PromptTemplate(
-        template="""You are a Support Docs Copilot. Use only the retrieved context to answer the question concisely. If the context does not contain the answer, say "I don't know".
+        template="""You are a Support Docs Copilot. Use only the retrieved context to answer the question concisely.
+        
+        CRITICAL INSTRUCTION (Cite-to-Write):
+        You must append [doc_id] to the end of every sentence. Do not write a sentence if you cannot cite a source from the retrieved context. If the context does not contain the answer, say "I don't know".
         
         Chat History:
         {chat_history}
@@ -90,7 +138,10 @@ async def generate(state: GraphState):
         Answer:""",
         input_variables=["question", "context", "chat_history"],
     )
-    rag_chain = prompt | llm
+    selected_llm = llm_slow if run_count > 1 else llm
+    if run_count > 1:
+        logger.info(f"Using slow reasoning model ({getattr(settings, 'SLOW_LLM_MODEL', 'default')}) for retry attempt #{run_count}")
+    rag_chain = prompt | selected_llm
     generation = await rag_chain.ainvoke({"context": context, "question": question, "chat_history": history_str})
     return {"generation": generation.content, "sources": source_citations(documents), "run_count": run_count}
 
@@ -107,24 +158,7 @@ async def evaluate_answer(state: GraphState):
     generation = state["generation"]
     
     context = build_context(documents)
-    prompt = PromptTemplate(
-        template="""You are evaluating whether a generated answer is fully grounded in the retrieved facts.
-        Facts: \n\n {context} \n\n
-        Answer: {generation} \n
-        If the answer is supported by the facts, return 'yes'. If it contains hallucinations, return 'no'.
-        Provide a JSON with keys 'score' (yes/no) and 'confidence' (float 0.0-1.0).""",
-        input_variables=["context", "generation"],
-    )
-    grader = prompt | llm_json
-    
-    result = await grader.ainvoke({"context": context, "generation": generation})
-    try:
-        parsed = json.loads(result.content)
-        grade = parsed.get("score", "yes")
-        confidence = float(parsed.get("confidence", 0.8))
-    except:
-        grade = "yes"
-        confidence = 0.5
+    grade, confidence = evaluate_nli_groundedness(context, generation)
         
     return {"grounded": grade, "confidence_score": confidence}
 

@@ -22,8 +22,11 @@ from app.core.logging import configure_logging, logger, request_id_var
 from app.engine.document_registry import load_registry
 from app.engine.ingestion import delete_indexed_document, ingest_documents, reset_index
 from app.engine.context_builder import build_context, format_sources
+from app.engine.memory import add_session_message, get_session_history, list_user_sessions, delete_session
+from app.engine.query_transform import condense_query
+from app.engine.semantic_cache import get_cached_answer, set_cached_answer
 from app.graph.workflow import compile_workflow
-from app.guardrails.input import enforce_rate_limit, validate_query
+from app.guardrails.input import async_enforce_rate_limit, enforce_rate_limit, validate_query
 from app.guardrails.output import redact_sensitive_data
 from app.guardrails.validators import DetectPromptInjection
 from app.observability.metrics import RequestMetrics, log_request_metrics, timed_stage
@@ -71,6 +74,7 @@ input_guard = Guard().use(DetectPromptInjection, on_fail="exception")
 class ChatRequest(BaseModel):
     query: str
     chat_history: list[dict] = []
+    session_id: str | None = None
 
 class SourceCitation(BaseModel):
     source: str
@@ -84,6 +88,7 @@ class ChatResponse(BaseModel):
     answer: str
     sources: list[SourceCitation] = []
     confidence: float = 0.0
+    session_id: str = "default"
 
 class IngestionRequest(BaseModel):
     data_dir: str = "data/docs"
@@ -119,7 +124,7 @@ async def login_endpoint(form_data: OAuth2PasswordRequestForm = Depends()):
     access_token = create_access_token(
         data={"sub": form_data.username, "role": user["role"]}, expires_delta=access_token_expires
     )
-    return {"access_token": access_token, "token_type": "bearer"}
+    return {"access_token": access_token, "token_type": "bearer", "role": user["role"]}
 
 @app.get("/documents")
 async def documents_endpoint(user: UserContext = Depends(resolve_user)):
@@ -128,8 +133,15 @@ async def documents_endpoint(user: UserContext = Depends(resolve_user)):
 @app.post("/admin/ingest")
 async def admin_ingest_endpoint(request: IngestionRequest, user: UserContext = Depends(resolve_user)):
     require_admin(user)
-    ingest_documents(data_dir=request.data_dir, force=request.force)
-    return {"status": "ok", "message": "Ingestion completed."}
+    try:
+        from app.core.queue import get_arq_pool
+        pool = await get_arq_pool()
+        job = await pool.enqueue_job("async_ingest_documents", data_dir=request.data_dir, force=request.force)
+        return {"status": "ok", "message": "Ingestion task queued.", "job_id": job.job_id}
+    except Exception as e:
+        logger.warning(f"Arq enqueue failed ({e}), falling back to synchronous ingestion.")
+        ingest_documents(data_dir=request.data_dir, force=request.force)
+        return {"status": "ok", "message": "Ingestion completed synchronously."}
 
 @app.post("/admin/upload")
 async def admin_upload_endpoint(files: list[UploadFile] = File(...), user: UserContext = Depends(resolve_user)):
@@ -165,14 +177,38 @@ async def get_eval_endpoint(user: UserContext = Depends(resolve_user)):
 @app.post("/admin/eval")
 async def post_eval_endpoint(user: UserContext = Depends(resolve_user)):
     require_admin(user)
-    summary = await run_local_evaluation()
-    report_content = REPORT_PATH.read_text(encoding="utf-8") if REPORT_PATH.exists() else "Report generated."
-    return {"status": "ok", "summary": summary, "report": report_content}
+    try:
+        from app.core.queue import get_arq_pool
+        pool = await get_arq_pool()
+        job = await pool.enqueue_job("async_run_ragas_eval")
+        return {"status": "ok", "message": "RAGAS evaluation task queued.", "job_id": job.job_id}
+    except Exception as e:
+        logger.warning(f"Arq enqueue failed ({e}), falling back to synchronous evaluation.")
+        summary = await run_local_evaluation()
+        report_content = REPORT_PATH.read_text(encoding="utf-8") if REPORT_PATH.exists() else "Report generated."
+        return {"status": "ok", "summary": summary, "report": report_content}
+
+@app.get("/tasks/status/{job_id}")
+async def get_task_status_endpoint(job_id: str, user: UserContext = Depends(resolve_user)):
+    try:
+        from app.core.queue import get_arq_pool
+        from arq.jobs import Job
+        pool = await get_arq_pool()
+        job = Job(job_id, redis=pool)
+        status = await job.status()
+        info = await job.info() if status else None
+        return {
+            "job_id": job_id,
+            "status": status.value if status else "unknown",
+            "result": getattr(info, "result", None) if info else None
+        }
+    except Exception as e:
+        return {"job_id": job_id, "status": "error", "error": str(e)}
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest, http_request: Request, user: UserContext = Depends(resolve_user)):
     metrics = RequestMetrics()
-    enforce_rate_limit(http_request.client.host if http_request.client else user.user_id)
+    await async_enforce_rate_limit(http_request.client.host if http_request.client else user.user_id)
     validate_query(request.query)
     if settings.ENABLE_GUARDRAILS:
         try:
@@ -180,18 +216,37 @@ async def chat_endpoint(request: ChatRequest, http_request: Request, user: UserC
         except Exception as e:
             raise CopilotError(str(getattr(e, "message", e)), status_code=400)
 
-    initial_state = {"question": request.query, "chat_history": request.chat_history, "run_count": 0}
+    session_id = request.session_id or str(uuid.uuid4())
+    chat_history = request.chat_history
+    if not chat_history:
+        chat_history = await get_session_history(user.user_id, session_id)
+
+    standalone_query = await condense_query(request.query, chat_history)
+
+    cached = await get_cached_answer(standalone_query)
+    if cached:
+        log_request_metrics(metrics, route="/chat (cache hit)", sources=len(cached.get("sources", [])), model="semantic_cache")
+        await add_session_message(user.user_id, session_id, "user", request.query)
+        await add_session_message(user.user_id, session_id, "assistant", cached["answer"], cached.get("sources", []), cached.get("confidence", 0.99))
+        return ChatResponse(query=request.query, answer=cached["answer"], sources=cached.get("sources", []), confidence=cached.get("confidence", 0.99), session_id=session_id)
+
+    initial_state = {"question": standalone_query, "chat_history": chat_history, "run_count": 0}
     try:
         with timed_stage(metrics, "rag_workflow"):
             final_state = await rag_agent.ainvoke(initial_state)
         answer = redact_sensitive_data(final_state.get("generation", "Unable to compile answer."))
         sources = final_state.get("sources", [])
         confidence = final_state.get("confidence_score", 0.0)
+        
+        if answer and sources:
+            await set_cached_answer(standalone_query, answer, sources, confidence)
+            await add_session_message(user.user_id, session_id, "user", request.query)
+            await add_session_message(user.user_id, session_id, "assistant", answer, sources, confidence)
     except Exception as e:
         raise CopilotError(str(e), status_code=500)
 
     log_request_metrics(metrics, route="/chat", sources=len(sources), model=settings.LLM_MODEL)
-    return ChatResponse(query=request.query, answer=answer, sources=sources, confidence=confidence)
+    return ChatResponse(query=request.query, answer=answer, sources=sources, confidence=confidence, session_id=session_id)
 
 @app.post("/chat/feedback")
 async def chat_feedback_endpoint(request: FeedbackRequest, user: UserContext = Depends(resolve_user)):
@@ -200,7 +255,7 @@ async def chat_feedback_endpoint(request: FeedbackRequest, user: UserContext = D
 
 @app.post("/chat/stream")
 async def chat_stream_endpoint(request: ChatRequest, http_request: Request, user: UserContext = Depends(resolve_user)):
-    enforce_rate_limit(http_request.client.host if http_request.client else user.user_id)
+    await async_enforce_rate_limit(http_request.client.host if http_request.client else user.user_id)
     validate_query(request.query)
     if settings.ENABLE_GUARDRAILS:
         try:
@@ -208,44 +263,79 @@ async def chat_stream_endpoint(request: ChatRequest, http_request: Request, user
         except Exception as e:
             raise CopilotError(str(getattr(e, "message", e)), status_code=400)
 
+    session_id = request.session_id or str(uuid.uuid4())
+    chat_history = request.chat_history
+    if not chat_history:
+        chat_history = await get_session_history(user.user_id, session_id)
+
+    standalone_query = await condense_query(request.query, chat_history)
+
     async def token_generator():
         try:
             metrics = RequestMetrics()
-            initial_state = {"question": request.query, "chat_history": request.chat_history, "run_count": 0}
-            with timed_stage(metrics, "rag_workflow"):
-                final_state = await rag_agent.ainvoke(initial_state)
-            documents = final_state.get("documents", [])
-            
-            if not documents:
-                yield "I am sorry, no reliable matching documentation was found."
+            cached = await get_cached_answer(standalone_query)
+            if cached:
+                log_request_metrics(metrics, route="/chat/stream (cache hit)", sources=len(cached.get("sources", [])), model="semantic_cache")
+                await add_session_message(user.user_id, session_id, "user", request.query)
+                await add_session_message(user.user_id, session_id, "assistant", cached["answer"], cached.get("sources", []), cached.get("confidence", 0.99))
+                yield cached["answer"]
+                sources_list = cached.get("sources", [])
+                if sources_list:
+                    yield f"\n\n{format_sources(sources_list)}" if isinstance(sources_list, list) and sources_list and hasattr(sources_list[0], 'metadata') else f"\n\n{sources_list}"
                 return
 
-            history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in request.chat_history[-5:]])
-            context = build_context(documents)
-            prompt = PromptTemplate(
-                template="""You are a Support Docs Copilot. Use only the retrieved context to answer the question concisely. If you don't know the answer, say "I don't know".
-                
-                Chat History:
-                {chat_history}
-                
-                Question: {question} 
-                Context: {context} \n\nAnswer:""",
-                input_variables=["question", "context", "chat_history"],
-            )
-            async_llm = ChatOpenAI(
-                model=settings.LLM_MODEL,
-                temperature=0,
-                openai_api_key=settings.OPENROUTER_API_KEY,
-                openai_api_base=settings.OPENROUTER_BASE_URL,
-                default_headers={"HTTP-Referer": "https://localhost:3000", "X-Title": "Support Docs Copilot"},
-            )
-            rag_chain = prompt | async_llm
+            initial_state = {"question": standalone_query, "chat_history": chat_history, "run_count": 0}
+            documents = []
+            sources_text = ""
+            grounded_result = "yes"
+            has_streamed_tokens = False
+            streamed_text = ""
 
-            async for chunk in rag_chain.astream({"context": context, "question": request.query, "chat_history": history_str}):
-                if chunk.content:
-                    yield redact_sensitive_data(chunk.content)
-                    await asyncio.sleep(0.01)
-            yield format_sources(documents)
+            with timed_stage(metrics, "rag_workflow_stream"):
+                async for event in rag_agent.astream_events(initial_state, version="v2"):
+                    kind = event["event"]
+                    node_name = event.get("metadata", {}).get("langgraph_node", "")
+                    
+                    if kind == "on_chat_model_stream" and node_name == "generate":
+                        chunk = event["data"]["chunk"]
+                        if chunk and getattr(chunk, "content", None):
+                            has_streamed_tokens = True
+                            streamed_text += chunk.content
+                            yield redact_sensitive_data(chunk.content)
+                            await asyncio.sleep(0.005)
+                            
+                    elif kind == "on_chain_end":
+                        output = event.get("data", {}).get("output")
+                        if isinstance(output, dict):
+                            if "documents" in output:
+                                documents = output["documents"]
+                            if "sources" in output:
+                                sources_text = output["sources"]
+                            if "grounded" in output:
+                                grounded_result = output["grounded"]
+
+            if not has_streamed_tokens:
+                if not documents:
+                    yield "I am sorry, no reliable matching documentation was found."
+                else:
+                    yield "I am sorry, I could not generate a response based on the available documentation."
+                return
+
+            if str(grounded_result).lower() == "no":
+                yield "\n\n🚨 **[CANCELLED: This response violated safety guidelines and has been retracted.]**"
+                return
+
+            if sources_text:
+                yield f"\n\n{sources_text}"
+            elif documents:
+                yield format_sources(documents)
+                
+            if has_streamed_tokens and documents and str(grounded_result).lower() != "no":
+                redacted_text = redact_sensitive_data(streamed_text)
+                await set_cached_answer(standalone_query, redacted_text, documents, 0.98)
+                await add_session_message(user.user_id, session_id, "user", request.query)
+                await add_session_message(user.user_id, session_id, "assistant", redacted_text, documents, 0.98)
+                
             log_request_metrics(metrics, route="/chat/stream", sources=len(documents), model=settings.LLM_MODEL)
         except Exception as exc:
             logger.error(f"Streaming error: {exc}", exc_info=True)
@@ -255,3 +345,19 @@ async def chat_stream_endpoint(request: ChatRequest, http_request: Request, user
                 yield f"\n\n⚠️ **Error generating response:** {exc}"
 
     return StreamingResponse(token_generator(), media_type="text/event-stream")
+
+@app.get("/api/v1/sessions")
+async def get_user_sessions_endpoint(user: UserContext = Depends(resolve_user)):
+    sessions = await list_user_sessions(user.user_id)
+    return {"sessions": sessions}
+
+@app.get("/api/v1/sessions/{session_id}/messages")
+async def get_session_messages_endpoint(session_id: str, user: UserContext = Depends(resolve_user)):
+    messages = await get_session_history(user.user_id, session_id, limit=50)
+    return {"session_id": session_id, "messages": messages}
+
+@app.delete("/api/v1/sessions/{session_id}")
+async def delete_session_endpoint(session_id: str, user: UserContext = Depends(resolve_user)):
+    success = await delete_session(user.user_id, session_id)
+    return {"status": "ok" if success else "error", "session_id": session_id}
+

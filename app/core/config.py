@@ -6,13 +6,18 @@ class Settings(BaseSettings):
     # OpenRouter LLM Config
     OPENROUTER_API_KEY: str = ""
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
-    LLM_MODEL: str = "google/gemma-4-31b-it:free"
+    LLM_MODEL: str = "deepseek/deepseek-v4-flash"
+    FAST_LLM_MODEL: str = "deepseek/deepseek-v4-flash"
+    SLOW_LLM_MODEL: str = "deepseek/deepseek-r1"
     
     # Qdrant Vector DB Config
     QDRANT_URL: str = ""
     QDRANT_LOCATION: str = "./qdrant_data"
     COLLECTION_NAME: str = "support_docs"
     DATA_DIR: str = "data/docs"
+    
+    # Redis & Queue Config
+    REDIS_URL: str = "redis://redis:6379/0"
     
     # Embeddings Config (Lightweight ONNX cpu-only FastEmbed)
     DENSE_EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"
