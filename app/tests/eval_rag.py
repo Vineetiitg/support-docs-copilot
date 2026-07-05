@@ -71,8 +71,8 @@ async def run_local_evaluation(
     fast_llm = ChatOpenAI(
         model=getattr(settings, "FAST_LLM_MODEL", settings.LLM_MODEL),
         temperature=0,
-        openai_api_key=settings.OPENROUTER_API_KEY,
-        openai_api_base=settings.OPENROUTER_BASE_URL,
+        openai_api_key=getattr(settings, "FAST_LLM_API_KEY", "") or settings.OPENROUTER_API_KEY,
+        openai_api_base=getattr(settings, "FAST_LLM_BASE_URL", "") or settings.OPENROUTER_BASE_URL,
         default_headers={"HTTP-Referer": "https://localhost:3000", "X-Title": "Support Docs Copilot"},
     )
     slow_llm = ChatOpenAI(

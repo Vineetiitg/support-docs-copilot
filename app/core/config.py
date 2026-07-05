@@ -3,11 +3,13 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Support Docs Copilot"
     
-    # OpenRouter LLM Config
+    # OpenRouter / LPU LLM Config
     OPENROUTER_API_KEY: str = ""
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
     LLM_MODEL: str = "deepseek/deepseek-v4-flash"
-    FAST_LLM_MODEL: str = "deepseek/deepseek-v4-flash"
+    FAST_LLM_MODEL: str = "google/gemini-2.0-flash-lite-preview-02-05"
+    FAST_LLM_API_KEY: str = ""
+    FAST_LLM_BASE_URL: str = ""
     SLOW_LLM_MODEL: str = "deepseek/deepseek-r1"
     
     # Qdrant Vector DB Config
@@ -19,17 +21,22 @@ class Settings(BaseSettings):
     # Redis & Queue Config
     REDIS_URL: str = "redis://redis:6379/0"
     
-    # Embeddings Config (Lightweight ONNX cpu-only FastEmbed)
+    # Cohere API Config (for Document Ranking and Relevance Grading)
+    COHERE_API_KEY: str = ""
+
+    # Embeddings & Reranker Config
     DENSE_EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"
     SPARSE_EMBEDDING_MODEL: str = "Qdrant/bm25"
-    RERANKER_MODEL: str = "BAAI/bge-reranker-base"
+    RERANKER_PROVIDER: str = "auto"  # "auto" (cohere if key present else flashrank), "cohere", "flashrank"
+    RERANKER_MODEL: str = "rerank-english-v3.0"
+    FLASHRANK_MODEL: str = "ms-marco-TinyBERT-L-2-v2"
 
     # Retrieval Config
     RETRIEVAL_MODE: str = "dense"
-    RETRIEVAL_TOP_K: int = 15
+    RETRIEVAL_TOP_K: int = 5
     RERANKER_TOP_N: int = 3
-    RERANKER_ENABLED: bool = False
-    MIN_RELEVANCE_SCORE: float = 0.0
+    RERANKER_ENABLED: bool = True
+    MIN_RELEVANCE_SCORE: float = 0.2
     MAX_CONTEXT_CHARS: int = 12000
 
     # Chunking Config

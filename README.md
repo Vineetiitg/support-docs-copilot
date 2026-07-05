@@ -200,3 +200,4 @@ make down    # Tear down cluster and free ports
 - **JWT Authentication:** Protected endpoints require OAuth2 Bearer Tokens. Authenticate via `/auth/login` (default roles: `user` and `admin`).
 - **Input Guardrails:** Automatically checks for prompt injection and applies rate limiting (30 req/min).
 - **Output Guardrails:** Automatically scrubs and redacts PII (SSNs, credit card numbers) before returning answers to the UI.
+.

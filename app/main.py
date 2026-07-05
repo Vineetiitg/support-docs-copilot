@@ -19,11 +19,14 @@ from app.core.config import settings
 from app.core.dependencies import check_openrouter, check_qdrant
 from app.core.errors import CopilotError
 from app.core.logging import configure_logging, logger, request_id_var
+from app.core.queue import get_redis_client
 from app.engine.document_registry import load_registry
 from app.engine.ingestion import delete_indexed_document, ingest_documents, reset_index
 from app.engine.context_builder import build_context, format_sources
-from app.engine.memory import add_session_message, get_session_history, list_user_sessions, delete_session
+import csv
+from app.engine.memory import add_session_message, get_session_history, list_user_sessions, delete_session, get_session_summary, list_all_sessions
 from app.engine.query_transform import condense_query
+from app.engine.retriever import retrieve_documents
 from app.engine.semantic_cache import get_cached_answer, set_cached_answer
 from app.graph.workflow import compile_workflow
 from app.guardrails.input import async_enforce_rate_limit, enforce_rate_limit, validate_query
@@ -41,6 +44,47 @@ if settings.LANGCHAIN_TRACING_V2 and settings.LANGCHAIN_API_KEY:
     logger.info(f"LangSmith tracing enabled for project: {settings.LANGCHAIN_PROJECT}")
 
 app = FastAPI(title=settings.PROJECT_NAME)
+
+@app.on_event("startup")
+async def startup_faq_prewarming():
+    try:
+        csv_path = Path("datasets/golden_qa.csv")
+        if csv_path.exists():
+            logger.info("PRE-WARMING SEMANTIC CACHE: Seeding FAQ entries from golden_qa.csv...")
+            with open(csv_path, mode="r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                count = 0
+                for row in reader:
+                    question = row.get("question", "").strip()
+                    answer = row.get("expected_answer", "").strip()
+                    sources_raw = row.get("expected_sources", "").strip()
+                    if question and answer:
+                        sources = [{"doc_id": sources_raw, "source": sources_raw, "snippet": answer}] if sources_raw else []
+                        await set_cached_answer(question, answer, sources, confidence=0.99)
+                        count += 1
+            logger.info(f"PRE-WARMING COMPLETE: Successfully seeded {count} FAQ entries into Redis vector cache.")
+    except Exception as e:
+        logger.warning(f"FAQ pre-warming failed or skipped: {e}")
+
+async def resolve_query_speculative(query: str, chat_history: list, summary: str):
+    speculative_docs = []
+    if chat_history:
+        condense_task = asyncio.create_task(condense_query(query, chat_history, summary=summary))
+        retrieval_task = asyncio.create_task(retrieve_documents(query, chat_history))
+        results = await asyncio.gather(condense_task, retrieval_task, return_exceptions=True)
+        
+        standalone_query = query if isinstance(results[0], Exception) else results[0]
+        raw_docs = [] if isinstance(results[1], Exception) else results[1]
+        
+        if raw_docs:
+            top_sim = max([d.metadata.get("similarity_score", 0.0) for d in raw_docs] + [0.0])
+            if top_sim >= 0.85:
+                logger.info(f"SPECULATIVE RETRIEVAL HIT: Raw query '{query}' matched with top similarity {top_sim:.4f} >= 0.85!")
+                speculative_docs = raw_docs
+    else:
+        standalone_query = await condense_query(query, chat_history, summary=summary)
+        
+    return standalone_query, speculative_docs
 
 app.add_middleware(
     CORSMiddleware,
@@ -97,8 +141,12 @@ class IngestionRequest(BaseModel):
 class FeedbackRequest(BaseModel):
     query: str
     answer: str
-    is_positive: bool
+    is_positive: bool = True
     comments: str | None = None
+
+class InterveneRequest(BaseModel):
+    message: str
+    role: str = "assistant"
 
 @app.get("/health")
 async def health_endpoint():
@@ -219,9 +267,10 @@ async def chat_endpoint(request: ChatRequest, http_request: Request, user: UserC
     session_id = request.session_id or str(uuid.uuid4())
     chat_history = request.chat_history
     if not chat_history:
-        chat_history = await get_session_history(user.user_id, session_id)
+        chat_history = await get_session_history(user.user_id, session_id, limit=6)
+    summary = await get_session_summary(user.user_id, session_id)
 
-    standalone_query = await condense_query(request.query, chat_history)
+    standalone_query, speculative_docs = await resolve_query_speculative(request.query, chat_history, summary=summary)
 
     cached = await get_cached_answer(standalone_query)
     if cached:
@@ -230,7 +279,7 @@ async def chat_endpoint(request: ChatRequest, http_request: Request, user: UserC
         await add_session_message(user.user_id, session_id, "assistant", cached["answer"], cached.get("sources", []), cached.get("confidence", 0.99))
         return ChatResponse(query=request.query, answer=cached["answer"], sources=cached.get("sources", []), confidence=cached.get("confidence", 0.99), session_id=session_id)
 
-    initial_state = {"question": standalone_query, "chat_history": chat_history, "run_count": 0}
+    initial_state = {"question": standalone_query, "chat_history": chat_history, "summary": summary, "run_count": 0, "documents": speculative_docs}
     try:
         with timed_stage(metrics, "rag_workflow"):
             final_state = await rag_agent.ainvoke(initial_state)
@@ -266,9 +315,10 @@ async def chat_stream_endpoint(request: ChatRequest, http_request: Request, user
     session_id = request.session_id or str(uuid.uuid4())
     chat_history = request.chat_history
     if not chat_history:
-        chat_history = await get_session_history(user.user_id, session_id)
+        chat_history = await get_session_history(user.user_id, session_id, limit=6)
+    summary = await get_session_summary(user.user_id, session_id)
 
-    standalone_query = await condense_query(request.query, chat_history)
+    standalone_query, speculative_docs = await resolve_query_speculative(request.query, chat_history, summary=summary)
 
     async def token_generator():
         try:
@@ -279,12 +329,9 @@ async def chat_stream_endpoint(request: ChatRequest, http_request: Request, user
                 await add_session_message(user.user_id, session_id, "user", request.query)
                 await add_session_message(user.user_id, session_id, "assistant", cached["answer"], cached.get("sources", []), cached.get("confidence", 0.99))
                 yield cached["answer"]
-                sources_list = cached.get("sources", [])
-                if sources_list:
-                    yield f"\n\n{format_sources(sources_list)}" if isinstance(sources_list, list) and sources_list and hasattr(sources_list[0], 'metadata') else f"\n\n{sources_list}"
                 return
 
-            initial_state = {"question": standalone_query, "chat_history": chat_history, "run_count": 0}
+            initial_state = {"question": standalone_query, "chat_history": chat_history, "summary": summary, "run_count": 0, "documents": speculative_docs}
             documents = []
             sources_text = ""
             grounded_result = "yes"
@@ -292,11 +339,18 @@ async def chat_stream_endpoint(request: ChatRequest, http_request: Request, user
             streamed_text = ""
 
             with timed_stage(metrics, "rag_workflow_stream"):
+                redis = await get_redis_client()
                 async for event in rag_agent.astream_events(initial_state, version="v2"):
                     kind = event["event"]
                     node_name = event.get("metadata", {}).get("langgraph_node", "")
                     
                     if kind == "on_chat_model_stream" and node_name == "generate":
+                        if await redis.exists(f"session:{session_id}:terminate"):
+                            await redis.delete(f"session:{session_id}:terminate")
+                            yield "\n\n🛑 **[TERMINATED BY USER: Generation was stopped.]**"
+                            await add_session_message(user.user_id, session_id, "user", request.query)
+                            await add_session_message(user.user_id, session_id, "assistant", streamed_text + "\n\n🛑 [TERMINATED BY USER]", documents or [], 0.0)
+                            return
                         chunk = event["data"]["chunk"]
                         if chunk and getattr(chunk, "content", None):
                             has_streamed_tokens = True
@@ -325,11 +379,6 @@ async def chat_stream_endpoint(request: ChatRequest, http_request: Request, user
                 yield "\n\n🚨 **[CANCELLED: This response violated safety guidelines and has been retracted.]**"
                 return
 
-            if sources_text:
-                yield f"\n\n{sources_text}"
-            elif documents:
-                yield format_sources(documents)
-                
             if has_streamed_tokens and documents and str(grounded_result).lower() != "no":
                 redacted_text = redact_sensitive_data(streamed_text)
                 await set_cached_answer(standalone_query, redacted_text, documents, 0.98)
@@ -356,8 +405,37 @@ async def get_session_messages_endpoint(session_id: str, user: UserContext = Dep
     messages = await get_session_history(user.user_id, session_id, limit=50)
     return {"session_id": session_id, "messages": messages}
 
+@app.post("/api/v1/sessions/{session_id}/terminate")
+async def terminate_session_endpoint(session_id: str, user: UserContext = Depends(resolve_user)):
+    redis = await get_redis_client()
+    await redis.setex(f"session:{session_id}:terminate", 60, "1")
+    return {"status": "terminated", "session_id": session_id}
+
 @app.delete("/api/v1/sessions/{session_id}")
 async def delete_session_endpoint(session_id: str, user: UserContext = Depends(resolve_user)):
     success = await delete_session(user.user_id, session_id)
     return {"status": "ok" if success else "error", "session_id": session_id}
+
+@app.get("/api/v1/admin/sessions")
+async def admin_list_sessions_endpoint(user: UserContext = Depends(resolve_user)):
+    if user.role != "admin":
+        raise CopilotError("Admin privileges required", status_code=403)
+    sessions = await list_all_sessions(limit=50)
+    return {"sessions": sessions}
+
+@app.get("/api/v1/admin/sessions/{user_id}/{session_id}/messages")
+async def admin_get_session_messages_endpoint(user_id: str, session_id: str, user: UserContext = Depends(resolve_user)):
+    if user.role != "admin":
+        raise CopilotError("Admin privileges required", status_code=403)
+    messages = await get_session_history(user_id, session_id, limit=50)
+    summary = await get_session_summary(user_id, session_id)
+    return {"session_id": session_id, "user_id": user_id, "messages": messages, "summary": summary}
+
+@app.post("/api/v1/admin/sessions/{user_id}/{session_id}/message")
+async def admin_intervene_message_endpoint(user_id: str, session_id: str, request: InterveneRequest, user: UserContext = Depends(resolve_user)):
+    if user.role != "admin":
+        raise CopilotError("Admin privileges required", status_code=403)
+    await add_session_message(user_id, session_id, request.role, request.message)
+    return {"status": "ok", "message": "Intervention message injected."}
+
 

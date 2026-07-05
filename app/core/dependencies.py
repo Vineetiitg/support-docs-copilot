@@ -24,8 +24,9 @@ def get_qdrant_client() -> QdrantClient:
 def check_openrouter() -> dict[str, Any]:
     try:
         headers = {"Authorization": f"Bearer {settings.OPENROUTER_API_KEY}"}
-        response = requests.get("https://openrouter.ai/api/v1/auth/key", headers=headers, timeout=3)
-        return {"ok": response.ok, "status_code": response.status_code}
+        url = f"{settings.OPENROUTER_BASE_URL.rstrip('/v1').rstrip('/')}/api/v1/auth/key" if "openrouter.ai" in settings.OPENROUTER_BASE_URL else f"{settings.OPENROUTER_BASE_URL}/models"
+        response = requests.get(url, headers=headers, timeout=5)
+        return {"ok": response.ok or response.status_code == 200, "status_code": response.status_code}
     except Exception as exc:
         return {"ok": bool(settings.OPENROUTER_API_KEY), "error": str(exc)}
 

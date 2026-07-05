@@ -9,7 +9,7 @@ langchain-text-splitters==0.2.4
 langchain-openai==0.1.22
 langchain-qdrant==0.1.4
 qdrant-client==1.10.1
-fastembed==0.3.6
+fastembed>=0.4.1
 langgraph==0.2.76
 guardrails-ai==0.5.0
 ragas==0.1.21
@@ -34,5 +34,7 @@ arq>=0.26.0
 redis>=5.0.0
 sentence-transformers>=2.7.0
 torch==2.2.2+cpu
-transformers>=4.40.0
+transformers==4.39.3
+cohere>=7.0.0
+flashrank>=0.2.8
 

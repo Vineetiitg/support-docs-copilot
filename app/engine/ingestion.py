@@ -92,10 +92,23 @@ def delete_indexed_document(doc_id: str) -> None:
     if doc_id not in registry:
         logger.info(f"Document not found: {doc_id}")
         return
+    record = registry[doc_id]
+    if source_path := record.get("source_path"):
+        try:
+            Path(source_path).unlink(missing_ok=True)
+            logger.info(f"Deleted physical file: {source_path}")
+        except Exception as e:
+            logger.warning(f"Failed to delete file {source_path}: {e}")
+    elif source := record.get("source"):
+        try:
+            (Path("data/docs") / source).unlink(missing_ok=True)
+            logger.info(f"Deleted physical file from data/docs/: {source}")
+        except Exception as e:
+            logger.warning(f"Failed to delete file {source}: {e}")
     delete_document(doc_id)
     del registry[doc_id]
     save_registry(registry)
-    logger.info(f"Deleted document: {doc_id}")
+    logger.info(f"Deleted document and vector embeddings: {doc_id}")
 
 
 def reset_index() -> None:

@@ -46,9 +46,17 @@ async def get_cached_answer(query: str, similarity_threshold: float = 0.92) -> O
                 
         if best_match:
             logger.info(f"Semantic cache HIT (similarity: {best_sim:.4f} >= {similarity_threshold}) for query: '{query}'")
+            formatted_sources = []
+            for s in best_match.get("sources", []):
+                src_dict = dict(s) if isinstance(s, dict) else {"source": str(s)}
+                if "snippet" not in src_dict:
+                    src_dict["snippet"] = src_dict.get("page_content", src_dict.get("source", best_match["answer"]))[:250]
+                if "source" not in src_dict:
+                    src_dict["source"] = src_dict.get("doc_id", "cached_doc")
+                formatted_sources.append(src_dict)
             return {
                 "answer": best_match["answer"],
-                "sources": best_match.get("sources", []),
+                "sources": formatted_sources,
                 "confidence": best_match.get("confidence", 0.99),
                 "cached": True,
                 "similarity": best_sim
@@ -68,13 +76,27 @@ async def set_cached_answer(query: str, answer: str, sources: List[Any], confide
         formatted_sources = []
         for s in sources:
             if isinstance(s, dict):
-                formatted_sources.append(s)
-            elif hasattr(s, "dict"):
-                formatted_sources.append(s.dict())
-            elif hasattr(s, "model_dump"):
-                formatted_sources.append(s.model_dump())
+                src_dict = dict(s)
+                if "snippet" not in src_dict:
+                    src_dict["snippet"] = src_dict.get("page_content", src_dict.get("source", str(s)))[:250]
+                if "source" not in src_dict:
+                    src_dict["source"] = src_dict.get("doc_id", "cached_doc")
+                formatted_sources.append(src_dict)
+            elif hasattr(s, "dict") or hasattr(s, "model_dump"):
+                src_dict = s.model_dump() if hasattr(s, "model_dump") else s.dict()
+                if "snippet" not in src_dict:
+                    src_dict["snippet"] = getattr(s, "page_content", str(s))[:250]
+                if "source" not in src_dict:
+                    src_dict["source"] = getattr(s, "metadata", {}).get("source", getattr(s, "metadata", {}).get("doc_id", "cached_doc"))
+                formatted_sources.append(src_dict)
+            elif hasattr(s, "page_content"):
+                formatted_sources.append({
+                    "source": getattr(s, "metadata", {}).get("source", getattr(s, "metadata", {}).get("doc_id", "cached_doc")),
+                    "doc_id": getattr(s, "metadata", {}).get("doc_id", "cached_doc"),
+                    "snippet": s.page_content[:250]
+                })
             else:
-                formatted_sources.append(str(s))
+                formatted_sources.append({"source": "cached_doc", "snippet": str(s)[:250]})
                 
         key = f"semantic_cache:{abs(hash(query))}"
         payload = {

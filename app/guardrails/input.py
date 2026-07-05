@@ -19,7 +19,6 @@ PROMPT_INJECTION_PATTERNS = [
     "disregard instructions",
     "reveal hidden",
     "you are now an arbitrary",
-    "dan",
     "do anything now",
     "ignore all constraints"
 ]

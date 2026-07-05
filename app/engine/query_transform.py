@@ -23,8 +23,8 @@ async def query_variants(query: str, chat_history: list[dict] = None) -> list[st
         llm = ChatOpenAI(
             model=getattr(settings, "FAST_LLM_MODEL", settings.LLM_MODEL),
             temperature=0,
-            openai_api_key=settings.OPENROUTER_API_KEY,
-            openai_api_base=settings.OPENROUTER_BASE_URL,
+            openai_api_key=getattr(settings, "FAST_LLM_API_KEY", "") or settings.OPENROUTER_API_KEY,
+            openai_api_base=getattr(settings, "FAST_LLM_BASE_URL", "") or settings.OPENROUTER_BASE_URL,
             default_headers={"HTTP-Referer": "https://localhost:3000", "X-Title": "Support Docs Copilot"},
         )
         prompt = PromptTemplate(
@@ -41,7 +41,10 @@ User Question: {question}""",
         chain = prompt | llm
         result = await chain.ainvoke({"question": normalized, "chat_history": history_str})
         
-        parsed = json.loads(result.content)
+        content = result.content.strip()
+        if content.startswith("```"):
+            content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content, flags=re.MULTILINE).strip()
+        parsed = json.loads(content)
         new_variants = parsed.get("variants", [])
         
         if isinstance(new_variants, list):
@@ -55,19 +58,22 @@ User Question: {question}""",
     return list(dict.fromkeys(variants))
 
 
-async def condense_query(query: str, chat_history: list[dict] = None) -> str:
-    if not chat_history:
+async def condense_query(query: str, chat_history: list[dict] = None, summary: str = None) -> str:
+    if not chat_history and not summary:
         return normalize_query(query)
         
     normalized = normalize_query(query)
-    history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in chat_history[-6:]])
+    lines = [f"{msg['role']}: {msg['content']}" for msg in (chat_history or [])[-6:]]
+    if summary:
+        lines.insert(0, summary if summary.startswith("System Summary:") else f"System Summary: {summary}")
+    history_str = "\n".join(lines)
     
     try:
         llm = ChatOpenAI(
             model=getattr(settings, "FAST_LLM_MODEL", settings.LLM_MODEL),
             temperature=0,
-            openai_api_key=settings.OPENROUTER_API_KEY,
-            openai_api_base=settings.OPENROUTER_BASE_URL,
+            openai_api_key=getattr(settings, "FAST_LLM_API_KEY", "") or settings.OPENROUTER_API_KEY,
+            openai_api_base=getattr(settings, "FAST_LLM_BASE_URL", "") or settings.OPENROUTER_BASE_URL,
             default_headers={"HTTP-Referer": "https://localhost:3000", "X-Title": "Support Docs Copilot"},
         )
         prompt = PromptTemplate(

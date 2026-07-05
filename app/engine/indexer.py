@@ -21,14 +21,20 @@ _sparse_embedder = None
 def dense_embeddings() -> FastEmbedEmbeddings:
     global _dense_embedder
     if _dense_embedder is None:
-        _dense_embedder = FastEmbedEmbeddings(model_name=settings.DENSE_EMBEDDING_MODEL)
+        import os
+        cache_dir = "/app/data/fastembed_cache" if os.path.exists("/app") else "./data/fastembed_cache"
+        os.makedirs(cache_dir, exist_ok=True)
+        _dense_embedder = FastEmbedEmbeddings(model_name=settings.DENSE_EMBEDDING_MODEL, cache_dir=cache_dir)
     return _dense_embedder
 
 
 def sparse_embeddings() -> FastEmbedSparse:
     global _sparse_embedder
     if _sparse_embedder is None:
-        _sparse_embedder = FastEmbedSparse(model_name=settings.SPARSE_EMBEDDING_MODEL)
+        import os
+        cache_dir = "/app/data/fastembed_cache" if os.path.exists("/app") else "./data/fastembed_cache"
+        os.makedirs(cache_dir, exist_ok=True)
+        _sparse_embedder = FastEmbedSparse(model_name=settings.SPARSE_EMBEDDING_MODEL, cache_dir=cache_dir)
     return _sparse_embedder
 
 

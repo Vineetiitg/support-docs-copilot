@@ -33,17 +33,17 @@ def resolve_user(token: str | None = Depends(oauth2_scheme)) -> UserContext:
     if not settings.AUTH_ENABLED:
         return UserContext(role="admin", user_id="local-dev")
     if not token:
-        raise CopilotError("Not authenticated", status_code=401)
+        return UserContext(role="guest", user_id="guest")
     
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
         username: str | None = payload.get("sub")
         role: str | None = payload.get("role")
         if username is None or role is None:
-            raise CopilotError("Invalid authentication credentials", status_code=401)
+            return UserContext(role="guest", user_id="guest")
         return UserContext(role=role, user_id=username)
     except jwt.PyJWTError:
-        raise CopilotError("Invalid authentication credentials", status_code=401)
+        return UserContext(role="guest", user_id="guest")
 
 
 def require_admin(user: UserContext = Depends(resolve_user)) -> None:
