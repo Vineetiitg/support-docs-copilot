@@ -354,6 +354,7 @@ def render_admin_portal_tab():
                 st.json(post_json("/admin/reset"))
                 st.success("Index reset successfully.")
             except requests.RequestException as exc:
+                st.error(f"Reset failed: {exc}")
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
