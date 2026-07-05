@@ -1,0 +1,206 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* Global Typography & Background */
+html, body, [class*="css"] {
+    font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif !important;
+}
+
+/* App Main Background with Subtle Ambient Glow */
+.stApp {
+    background: radial-gradient(circle at 15% 20%, rgba(99, 102, 241, 0.08) 0%, transparent 40%),
+                radial-gradient(circle at 85% 80%, rgba(168, 85, 247, 0.08) 0%, transparent 40%),
+                linear-gradient(180deg, #0b0f19 0%, #0f172a 100%) !important;
+    color: #f8fafc;
+}
+
+/* Glassmorphic Containers and Cards */
+.glass-card {
+    background: rgba(30, 41, 59, 0.45);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    padding: 1.5rem;
+    margin-bottom: 1.2rem;
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.2);
+    transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.glass-card:hover {
+    transform: translateY(-2px);
+    border-color: rgba(168, 85, 247, 0.3);
+    box-shadow: 0 12px 40px 0 rgba(168, 85, 247, 0.15);
+}
+
+/* Header & Title Gradient */
+h1 {
+    font-weight: 700 !important;
+    background: linear-gradient(135deg, #60a5fa 0%, #c084fc 50%, #f472b6 100%);
+    -webkit-background-clip: text !important;
+    -webkit-text-fill-color: transparent !important;
+    letter-spacing: -0.5px;
+    margin-bottom: 0.5rem !important;
+}
+
+h2, h3 {
+    font-weight: 600 !important;
+    color: #e2e8f0 !important;
+    letter-spacing: -0.3px;
+}
+
+/* Sidebar Styling */
+section[data-testid="stSidebar"] {
+    background: rgba(15, 23, 42, 0.8) !important;
+    backdrop-filter: blur(20px);
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+section[data-testid="stSidebar"] hr {
+    border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* Tab Navigation Styling */
+div[data-baseweb="tab-list"] {
+    background: rgba(30, 41, 59, 0.5) !important;
+    padding: 0.35rem !important;
+    border-radius: 12px !important;
+    border: 1px solid rgba(255, 255, 255, 0.06) !important;
+    gap: 0.5rem;
+}
+
+button[data-baseweb="tab"] {
+    font-family: 'Outfit', sans-serif !important;
+    font-weight: 500 !important;
+    font-size: 0.95rem !important;
+    border-radius: 8px !important;
+    padding: 0.6rem 1.2rem !important;
+    color: #94a3b8 !important;
+    transition: all 0.2s ease !important;
+}
+
+button[data-baseweb="tab"][aria-selected="true"] {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.25) 0%, rgba(168, 85, 247, 0.25) 100%) !important;
+    color: #f8fafc !important;
+    border: 1px solid rgba(168, 85, 247, 0.4) !important;
+    box-shadow: 0 4px 15px rgba(168, 85, 247, 0.15) !important;
+}
+
+/* Button Animations & Gradients */
+button[kind="primary"], .stButton > button[type="primary"], div[data-testid="stFormSubmitButton"] > button {
+    background: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%) !important;
+    color: white !important;
+    font-weight: 600 !important;
+    border: none !important;
+    border-radius: 10px !important;
+    padding: 0.6rem 1.4rem !important;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    box-shadow: 0 4px 15px rgba(168, 85, 247, 0.3) !important;
+}
+
+button[kind="primary"]:hover, .stButton > button[type="primary"]:hover {
+    transform: translateY(-2px) scale(1.01) !important;
+    box-shadow: 0 8px 25px rgba(168, 85, 247, 0.5) !important;
+}
+
+button[kind="secondary"], .stButton > button {
+    background: rgba(51, 65, 85, 0.4) !important;
+    color: #e2e8f0 !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    border-radius: 10px !important;
+    transition: all 0.2s ease !important;
+}
+
+button[kind="secondary"]:hover, .stButton > button:hover {
+    background: rgba(51, 65, 85, 0.8) !important;
+    border-color: rgba(255, 255, 255, 0.25) !important;
+    transform: translateY(-1px) !important;
+}
+
+/* Chat Message Styling */
+div[data-testid="stChatMessage"] {
+    background: rgba(30, 41, 59, 0.35) !important;
+    border: 1px solid rgba(255, 255, 255, 0.05) !important;
+    border-radius: 16px !important;
+    padding: 1.25rem !important;
+    margin-bottom: 1rem !important;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15) !important;
+}
+
+div[data-testid="stChatMessage"][data-testid*="user"] {
+    background: linear-gradient(135deg, rgba(30, 41, 59, 0.5) 0%, rgba(49, 46, 129, 0.3) 100%) !important;
+    border: 1px solid rgba(99, 102, 241, 0.25) !important;
+}
+
+/* Chat Input Styling */
+div[data-testid="stChatInput"] > div {
+    background: rgba(15, 23, 42, 0.8) !important;
+    border: 1px solid rgba(255, 255, 255, 0.15) !important;
+    border-radius: 14px !important;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3) !important;
+}
+
+div[data-testid="stChatInput"] > div:focus-within {
+    border-color: #a855f7 !important;
+    box-shadow: 0 0 0 2px rgba(168, 85, 247, 0.3), 0 8px 30px rgba(0, 0, 0, 0.4) !important;
+}
+
+/* Badges & Metrics */
+.status-badge {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    border-radius: 9999px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.badge-green {
+    background: rgba(16, 185, 129, 0.15);
+    color: #34d399;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.badge-yellow {
+    background: rgba(245, 158, 11, 0.15);
+    color: #fbbf24;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.badge-purple {
+    background: rgba(168, 85, 247, 0.15);
+    color: #c084fc;
+    border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
+.badge-blue {
+    background: rgba(59, 130, 246, 0.15);
+    color: #60a5fa;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+/* Source Citation Accordion */
+div[data-testid="stExpander"] {
+    background: rgba(15, 23, 42, 0.4) !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    border-radius: 12px !important;
+    overflow: hidden;
+}
+
+div[data-testid="stExpander"] summary {
+    font-weight: 500 !important;
+    color: #cbd5e1 !important;
+}
+
+/* Metrics & Stats Box */
+div[data-testid="stMetric"] {
+    background: rgba(30, 41, 59, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 1rem;
+}
+
+/* Code blocks & Monospace */
+code, pre {
+    font-family: 'JetBrains Mono', monospace !important;
+}
