@@ -411,12 +411,25 @@ def render_evaluation_tab():
     st.markdown('</div>', unsafe_allow_html=True)
     
     st.divider()
-    st.markdown("#### 📑 Latest Evaluation Report")
     try:
         res = get_json("/admin/eval")
         report_text = res.get("report", "No evaluation report available.")
+        col_hdr, col_dl = st.columns([3, 1])
+        with col_hdr:
+            st.markdown("#### 📑 Latest Evaluation Report")
+        with col_dl:
+            if report_text and report_text != "No evaluation report available.":
+                st.download_button(
+                    label="📥 Download Log (eval_report.md)",
+                    data=report_text,
+                    file_name="eval_report.md",
+                    mime="text/markdown",
+                    use_container_width=True,
+                    type="primary",
+                )
         st.markdown(f'<div class="glass-card">{report_text}</div>', unsafe_allow_html=True)
     except requests.RequestException:
+        st.markdown("#### 📑 Latest Evaluation Report")
         st.info("💡 No evaluation report available yet. Click the button above to run your first evaluation!")
 
 

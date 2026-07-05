@@ -138,4 +138,10 @@ git add data/docs/rest_endpoints_guide.md data/docs/redis_worker_architecture.md
 git commit -m "docs(benchmark): add REST/worker architecture documentation and 5-case HF readiness benchmark suite"
 ```
 
+### 5. 1-Click RAG Evaluation Report Download in UI
+```bash
+git add ui/app.py reports/eval_report.md git_commands.md
+git commit -m "feat(ui): add 1-click evaluation log download button in Admin RAGAS portal"
+```
+
 
