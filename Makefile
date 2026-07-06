@@ -1,4 +1,4 @@
-.PHONY: build up down logs ingest eval test
+.PHONY: build up down logs ingest eval test benchmark
 
 build:
 	docker-compose build
@@ -20,3 +20,6 @@ eval:
 
 test:
 	docker exec -it $$(docker-compose ps -q backend) python -m pytest
+
+benchmark:
+	python benchmark.py
